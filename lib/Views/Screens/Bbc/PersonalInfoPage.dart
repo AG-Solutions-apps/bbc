@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:yaani/Views/Screens/Bbc/LoginScreen.dart';
 import 'package:yaani/Views/Screens/Bbc/activity.dart';
+import 'BbcBottomNavBar.dart';
 
 // ─── Brand tokens (identical across all BBC screens) ──────────────────────────
 const _kBrand      = Color(0xFFB0126B);
@@ -320,6 +321,23 @@ class _ProfilePageBBccState extends State<ProfilePageBBcc> with SingleTickerProv
     _addressController.text = _originalValues['address'] ?? '';
   }
 
+  void _showSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message,
+            style: GoogleFonts.inter(fontSize: 13, color: Colors.white)),
+        backgroundColor: _kTextPri,
+        behavior: SnackBarBehavior.floating,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
   Future<void> _fetchFreshUserData(String token) async {
     try {
       final response = await http.post(
@@ -328,7 +346,7 @@ class _ProfilePageBBccState extends State<ProfilePageBBcc> with SingleTickerProv
           'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
         },
-      );
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
@@ -342,10 +360,22 @@ class _ProfilePageBBccState extends State<ProfilePageBBcc> with SingleTickerProv
             _isLoading = false;
           });
           await _saveUserDataToPrefs(data);
+          _showSnackBar('Fresh profile data loaded');
+        } else {
+          if (_userData != null) {
+            _showSnackBar('Failed to refresh profile. Showing cached data.');
+          }
+        }
+      } else {
+        if (_userData != null) {
+          _showSnackBar('Failed to refresh profile. Showing cached data.');
         }
       }
     } catch (e) {
       debugPrint('Error fetching fresh user data: $e');
+      if (_userData != null) {
+        _showSnackBar('Network error. Showing cached profile.');
+      }
       setState(() => _isLoading = false);
     }
   }
@@ -478,19 +508,6 @@ class _ProfilePageBBccState extends State<ProfilePageBBcc> with SingleTickerProv
       _showSnackBar('Network error: $e');
       setState(() => _isLoading = false);
     }
-  }
-
-  void _showSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message, style: GoogleFonts.dmSans(fontSize: 13, color: Colors.white)),
-        backgroundColor: _kTextPri,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-        duration: const Duration(seconds: 3),
-      ),
-    );
   }
 
   Future<void> _logout() async {
@@ -744,6 +761,7 @@ class _ProfilePageBBccState extends State<ProfilePageBBcc> with SingleTickerProv
           children: [
             _buildHeader(),
             Expanded(child: _buildScrollBody()),
+            const BbcBottomNavBar(activeTab: BbcTab.profile),
           ],
         ),
       ),

@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yaani/Views/Screens/Bbc/Signup.dart';
+import 'package:yaani/Services/NotificationService.dart';
 import 'HomeBbc.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -424,11 +425,14 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _loginToBackend(String mobile) async {
     try {
+      // Use the FCM token as the device identifier sent to the backend
+      final fcmToken = await NotificationService.getSavedToken();
+
       final response = await http.post(
         Uri.parse('https://businessboosters.club/public/api/login'),
         body: {
           'mobile': mobile,
-          'firebase_uid': FirebaseAuth.instance.currentUser?.uid ?? '',
+          'astrologer_id': fcmToken,
         },
       );
 
@@ -468,7 +472,9 @@ class _LoginScreenState extends State<LoginScreen> {
     await prefs.setString('bbc_user_name', user['name']?.toString() ?? '');
     await prefs.setString('bbc_user_mobile', user['mobile']?.toString() ?? '');
     await prefs.setString('bbc_user_data', jsonEncode(user));
-    await prefs.setString('firebase_uid', FirebaseAuth.instance.currentUser?.uid ?? '');
+    // Store FCM token instead of Firebase Auth UID
+    final fcmToken = await NotificationService.getSavedToken();
+    await prefs.setString('firebase_uid', fcmToken);
   }
 
   void _snack(String msg) {
