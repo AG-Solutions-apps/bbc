@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'dart:math' as math;
 
 // ─── Brand tokens ──────────────────────────────────────────────────────────────
 const _kBrand       = Color(0xFFB0126B);
@@ -46,6 +47,8 @@ class _ProfileDetailPageState extends State<ProfileDetailPage>
   final TextEditingController _leadAmountController = TextEditingController();
   late AnimationController _headerAnim;
   late Animation<double> _fadeAnim;
+  String? _currentUserId;
+  String? _currentUserName;
 
   @override
   void initState() {
@@ -59,6 +62,17 @@ class _ProfileDetailPageState extends State<ProfileDetailPage>
     if (widget.memberData != null) {
       _memberData = widget.memberData!;
       _parseProductsServices();
+    }
+    _loadCurrentUserId();
+  }
+
+  Future<void> _loadCurrentUserId() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _currentUserId = prefs.getString('bbc_user_id');
+        _currentUserName = prefs.getString('bbc_user_name');
+      });
     }
   }
 
@@ -272,6 +286,7 @@ ${_referredBy.isNotEmpty ? "🔗 REFERRED BY: $_referredBy\n" : ""}
 
   void _showSnackBar(String message) {
     if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(children: [
@@ -539,39 +554,53 @@ ${_referredBy.isNotEmpty ? "🔗 REFERRED BY: $_referredBy\n" : ""}
 
   @override
   Widget build(BuildContext context) {
+    final wishes = _memberData['wishes']?.toString().toLowerCase() ?? '';
+    final dob = _memberData['dob']?.toString();
+    final doa = _memberData['doa']?.toString();
+    final isBirthday = wishes.contains('birthday') || _isBirthdayToday(dob);
+    final isAnniversary = wishes.contains('anniversary') || _isAnniversaryToday(doa);
+    final hasCelebration = isBirthday || isAnniversary;
+    final isCurrentUser = _currentUserId != null && _memberData['id']?.toString() == _currentUserId;
+
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: const SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: Brightness.light),
       child: Scaffold(
         backgroundColor: _kBg,
-        body: Column(
+        body: Stack(
           children: [
-            _buildHeader(),
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 8),
-                    if (_productsServices.isNotEmpty)
-                      _buildSection(
-                        label: 'Products & Services',
-                        icon: Icons.inventory_2_outlined,
-                        child: _buildServicesBody(),
-                      ),
-                    if (_company.isNotEmpty || _address.isNotEmpty || _referredBy.isNotEmpty)
-                      _buildSection(
-                        label: 'Company Details',
-                        icon: Icons.business_center_rounded,
-                        child: _buildCompanyBody(),
-                      ),
-                    const SizedBox(height: 100),
-                  ],
+            Column(
+              children: [
+                _buildHeader(),
+                Expanded(
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 8),
+                        if (hasCelebration && !isCurrentUser) _buildCelebrationWishBox(isBirthday, isAnniversary),
+                        if (_productsServices.isNotEmpty)
+                          _buildSection(
+                            label: 'Products & Services',
+                            icon: Icons.inventory_2_outlined,
+                            child: _buildServicesBody(),
+                          ),
+                        if (_company.isNotEmpty || _address.isNotEmpty || _referredBy.isNotEmpty)
+                          _buildSection(
+                            label: 'Company Details',
+                            icon: Icons.business_center_rounded,
+                            child: _buildCompanyBody(),
+                          ),
+                        const SizedBox(height: 24), // Reduced from 100 to 24 to remove extra spacing
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+                _buildBottomActions(),
+              ],
             ),
-            _buildBottomActions(),
+            if (hasCelebration) const ConfettiWidget(),
           ],
         ),
       ),
@@ -1069,6 +1098,232 @@ ${_referredBy.isNotEmpty ? "🔗 REFERRED BY: $_referredBy\n" : ""}
       ),
     );
   }
+
+  // ─── Celebration Options & Helpers ───────────────────────────────────────────
+
+  bool _isBirthdayToday(String? dob) {
+    if (dob == null || dob.isEmpty) return false;
+    try {
+      final today = DateTime.now();
+      final separator = dob.contains('-') ? '-' : (dob.contains('/') ? '/' : null);
+      if (separator != null) {
+        final parts = dob.split(separator);
+        if (parts.length == 3) {
+          int? day, month;
+          if (parts[0].length == 4) {
+            // YYYY-MM-DD
+            month = int.tryParse(parts[1]);
+            day = int.tryParse(parts[2]);
+          } else if (parts[2].length == 4) {
+            // DD-MM-YYYY
+            month = int.tryParse(parts[1]);
+            day = int.tryParse(parts[0]);
+          }
+          if (month != null && day != null) {
+            return today.month == month && today.day == day;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error parsing birthday: $e');
+    }
+    return false;
+  }
+
+  bool _isAnniversaryToday(String? doa) {
+    if (doa == null || doa.isEmpty) return false;
+    try {
+      final today = DateTime.now();
+      final separator = doa.contains('-') ? '-' : (doa.contains('/') ? '/' : null);
+      if (separator != null) {
+        final parts = doa.split(separator);
+        if (parts.length == 3) {
+          int? day, month;
+          if (parts[0].length == 4) {
+            // YYYY-MM-DD
+            month = int.tryParse(parts[1]);
+            day = int.tryParse(parts[2]);
+          } else if (parts[2].length == 4) {
+            // DD-MM-YYYY
+            month = int.tryParse(parts[1]);
+            day = int.tryParse(parts[0]);
+          }
+          if (month != null && day != null) {
+            return today.month == month && today.day == day;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error parsing anniversary: $e');
+    }
+    return false;
+  }
+
+
+
+  Widget _buildCelebrationWishBox(bool isBirthday, bool isAnniversary) {
+    final colors = isBirthday
+        ? [const Color(0xFFF96D34), const Color(0xFFE5A93C)]
+        : [const Color(0xFFE91E63), const Color(0xFFC4156E)];
+        
+    final title = isBirthday && isAnniversary
+        ? 'Double Celebration! 🎉'
+        : (isBirthday ? 'Happy Birthday! 🎂' : 'Happy Anniversary! 💕');
+        
+    final subtitle = isBirthday && isAnniversary
+        ? 'Celebrate both their Birthday & Wedding Anniversary today!'
+        : (isBirthday ? 'Wish $_name a wonderful happy birthday!' : 'Wish $_name a beautiful wedding anniversary!');
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: colors[0].withOpacity(0.2), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: colors[0].withOpacity(0.08),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          )
+        ],
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white,
+            colors[0].withOpacity(0.04),
+            colors[1].withOpacity(0.06),
+          ],
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: colors[0].withOpacity(0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  isBirthday ? Icons.cake_rounded : Icons.favorite_rounded,
+                  color: colors[0],
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: GoogleFonts.poppins(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: _kTextPri,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        color: _kTextSec,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              if (isBirthday)
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder: (context) => WishDialog(
+                          member: _memberData,
+                          isBirthday: true,
+                          senderName: _currentUserName ?? 'Member',
+                        ),
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFF96D34),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.cake_rounded, color: Colors.white, size: 14),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Wish Birthday',
+                          style: GoogleFonts.dmSans(
+                              fontSize: 11,
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (isBirthday && isAnniversary) const SizedBox(width: 10),
+              if (isAnniversary)
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder: (context) => WishDialog(
+                          member: _memberData,
+                          isBirthday: false,
+                          senderName: _currentUserName ?? 'Member',
+                        ),
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFE91E63),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.favorite_rounded, color: Colors.white, size: 14),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Wish Anniversary',
+                          style: GoogleFonts.dmSans(
+                              fontSize: 11,
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ─── Lead bottom sheet ────────────────────────────────────────────────────────
@@ -1327,4 +1582,451 @@ class _Divider extends StatelessWidget {
   @override
   Widget build(BuildContext context) =>
       Container(height: 1, color: _kBorder);
+}
+
+// Confetti Particle System for Full-Screen Celebrations
+class ConfettiWidget extends StatefulWidget {
+  const ConfettiWidget({super.key});
+
+  @override
+  State<ConfettiWidget> createState() => _ConfettiWidgetState();
+}
+
+class _ConfettiWidgetState extends State<ConfettiWidget>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  final List<_Particle> _particles = [];
+  final _random = math.Random();
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 10),
+    )..addListener(() {
+        _updateParticles();
+      });
+    
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        final size = MediaQuery.of(context).size;
+        for (int i = 0; i < 85; i++) {
+          _particles.add(_Particle(
+            x: _random.nextDouble() * size.width,
+            y: -20 - _random.nextDouble() * 120,
+            vx: (_random.nextDouble() - 0.5) * 3.5,
+            vy: 2 + _random.nextDouble() * 5.5,
+            color: HSVColor.fromAHSV(
+              1.0,
+              _random.nextDouble() * 360,
+              0.8,
+              0.9,
+            ).toColor(),
+            size: 6 + _random.nextDouble() * 11,
+            rotation: _random.nextDouble() * math.pi * 2,
+            rotationSpeed: (_random.nextDouble() - 0.5) * 0.12,
+          ));
+        }
+        _controller.repeat();
+        
+        Future.delayed(const Duration(seconds: 10), () {
+          if (mounted) {
+            _controller.stop();
+            setState(() {
+              _particles.clear();
+            });
+          }
+        });
+      }
+    });
+  }
+
+  void _updateParticles() {
+    if (!mounted) return;
+    final size = MediaQuery.of(context).size;
+    setState(() {
+      for (var p in _particles) {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.rotation += p.rotationSpeed;
+        
+        if (p.y > size.height && _controller.isAnimating) {
+          p.y = -20;
+          p.x = _random.nextDouble() * size.width;
+          p.vy = 2 + _random.nextDouble() * 5.5;
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_particles.isEmpty) return const SizedBox.shrink();
+    return IgnorePointer(
+      child: CustomPaint(
+        painter: _ConfettiPainter(_particles),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
+}
+
+class _Particle {
+  double x;
+  double y;
+  double vx;
+  double vy;
+  Color color;
+  double size;
+  double rotation;
+  double rotationSpeed;
+
+  _Particle({
+    required this.x,
+    required this.y,
+    required this.vx,
+    required this.vy,
+    required this.color,
+    required this.size,
+    required this.rotation,
+    required this.rotationSpeed,
+  });
+}
+
+class _ConfettiPainter extends CustomPainter {
+  final List<_Particle> particles;
+  _ConfettiPainter(this.particles);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..style = PaintingStyle.fill;
+    for (var p in particles) {
+      paint.color = p.color;
+      canvas.save();
+      canvas.translate(p.x, p.y);
+      canvas.rotate(p.rotation);
+      canvas.drawRect(
+        Rect.fromCenter(center: Offset.zero, width: p.size, height: p.size * 0.6),
+        paint,
+      );
+      canvas.restore();
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
+class WishDialog extends StatefulWidget {
+  final Map<String, dynamic> member;
+  final bool isBirthday;
+  final String senderName;
+
+  const WishDialog({
+    super.key,
+    required this.member,
+    required this.isBirthday,
+    required this.senderName,
+  });
+
+  @override
+  State<WishDialog> createState() => _WishDialogState();
+}
+
+class _WishDialogState extends State<WishDialog> {
+  final TextEditingController _textCtrl = TextEditingController();
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchPromptAndGenerateText();
+  }
+
+  Future<void> _fetchPromptAndGenerateText() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('bbc_token');
+
+      final response = await http.get(
+        Uri.parse('https://businessboosters.club/public/api/fetch-message-prompt'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      String wishText = '';
+      bool useGemini = false;
+      String promptTemplate = '';
+      String apiKey = '';
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        final data = json['data'] ?? json;
+        final promptStatus = data['prompt_status']?.toString().toLowerCase() ?? 'no';
+        apiKey = data['api_key'] ?? data['gemini_api_key'] ?? 'AIzaSyAeg_D1p3v1fgPn7EyGf40e49GkjVVo7L8';
+        
+        promptTemplate = widget.isBirthday
+            ? (data['prompt_birthday']?.toString() ?? '')
+            : (data['prompt_anniversary']?.toString() ?? '');
+
+        if (promptStatus == 'yes') {
+          useGemini = true;
+        }
+      }
+
+      final recipientName = widget.member['name'] ?? 'Member';
+      final senderName = widget.senderName;
+
+      // Replace placeholders in the prompt template
+      String processedPrompt = promptTemplate
+          .replaceAll('[Recipient]', recipientName)
+          .replaceAll('[Sender]', senderName)
+          .replaceAll('Recipient', recipientName)
+          .replaceAll('Sender', senderName);
+
+      if (useGemini && processedPrompt.isNotEmpty && apiKey.isNotEmpty) {
+        String queryText = processedPrompt + 
+            "\n\nWrite a highly warm, personalized, unique wish from '$senderName' to '$recipientName'. "
+            "Use natural formatting with paragraph breaks, include relevant emojis, and vary the wording so it is unique. "
+            "Do not use markdown formatting, quotes, or asterisks (*).";
+
+        final geminiResponse = await http.post(
+          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'contents': [
+              {
+                'parts': [
+                  {'text': queryText}
+                ]
+              }
+            ],
+            'generationConfig': {
+              'temperature': 1.0
+            }
+          }),
+        );
+
+        if (geminiResponse.statusCode == 200) {
+          final geminiJson = jsonDecode(geminiResponse.body);
+          final generatedText = geminiJson['candidates']?[0]?['content']?['parts']?[0]?['text']?.toString();
+          if (generatedText != null && generatedText.trim().isNotEmpty) {
+            wishText = generatedText.trim();
+          }
+        } else {
+          debugPrint('Gemini API failed with status ${geminiResponse.statusCode}: ${geminiResponse.body}. Falling back to prompt.');
+        }
+      }
+
+      if (wishText.isEmpty) {
+        wishText = processedPrompt;
+      }
+
+      if (wishText.isEmpty) {
+        wishText = widget.isBirthday
+            ? '🎂 Happy Birthday $recipientName! 🎉🥳\n\nWishing you a fantastic year ahead filled with success, happiness, and prosperity.\n\nWarm Regards,\n$senderName'
+            : '💕 Happy Anniversary $recipientName! 💑\n\nWishing you both a lifetime of love, happiness, and togetherness.\n\nWarm Regards,\n$senderName';
+      }
+
+      if (mounted) {
+        setState(() {
+          _textCtrl.text = wishText;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error generating wish: $e');
+      final recipientName = widget.member['name'] ?? 'Member';
+      if (mounted) {
+        setState(() {
+          _textCtrl.text = widget.isBirthday
+              ? 'Happy Birthday, $recipientName! 🎂'
+              : 'Happy Anniversary, $recipientName! 💕';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  void _sendWish() async {
+    final mobile = widget.member['whatsapp_number'] ?? widget.member['mobile'];
+    if (mobile == null || mobile.toString().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('WhatsApp number is not available')),
+      );
+      return;
+    }
+    
+    String cleanMobile = mobile.toString().replaceAll(RegExp(r'[^\d]'), '');
+    if (!cleanMobile.startsWith('91') && cleanMobile.length == 10) {
+      cleanMobile = '91$cleanMobile';
+    }
+
+    final message = Uri.encodeComponent(_textCtrl.text.trim());
+    final url = 'https://wa.me/$cleanMobile?text=$message';
+
+    try {
+      if (await canLaunchUrl(Uri.parse(url))) {
+        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      } else {
+        await launchUrl(Uri.parse(url), mode: LaunchMode.platformDefault);
+      }
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      debugPrint('Error launching WhatsApp: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open WhatsApp')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = widget.isBirthday
+        ? [const Color(0xFFF96D34), const Color(0xFFE5A93C)]
+        : [const Color(0xFFE91E63), const Color(0xFFC4156E)];
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      backgroundColor: Colors.white,
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: colors[0].withOpacity(0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    widget.isBirthday ? Icons.cake_rounded : Icons.favorite_rounded,
+                    color: colors[0],
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.isBirthday ? 'Happy Birthday!' : 'Happy Anniversary!',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black,
+                        ),
+                      ),
+                      Text(
+                        'To: ${widget.member['name']}',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            if (_loading)
+              Container(
+                height: 120,
+                alignment: Alignment.center,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(color: colors[0]),
+                    const SizedBox(height: 14),
+                    Text(
+                      'Generating custom wish...',
+                      style: GoogleFonts.inter(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              )
+            else ...[
+              TextField(
+                controller: _textCtrl,
+                maxLines: 6,
+                minLines: 4,
+                style: GoogleFonts.inter(fontSize: 13, height: 1.4, color: Colors.black),
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: Colors.grey[50],
+                  contentPadding: const EdgeInsets.all(16),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: Colors.grey[200]!),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: colors[0]),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: Colors.grey[200]!),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: Colors.grey[300]!),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Text(
+                        'Close',
+                        style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: Colors.grey[700]),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _sendWish,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: colors[0],
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.send_rounded, size: 14, color: Colors.white),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Send Wish',
+                            style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }

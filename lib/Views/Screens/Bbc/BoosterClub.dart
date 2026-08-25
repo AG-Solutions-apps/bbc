@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'BbcBottomNavBar.dart';
 
 // ─── Brand tokens (identical across all BBC screens) ──────────────────────────
 const _kBrand      = Color(0xFFB0126B);
@@ -44,9 +45,46 @@ class _AboutUsPageState extends State<AboutUsPage> {
     _fetchCompanyAboutUs();
   }
 
+  void _showSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message,
+            style: GoogleFonts.inter(fontSize: 13, color: Colors.white)),
+        backgroundColor: _kTextPri,
+        behavior: SnackBarBehavior.floating,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  Future<void> _loadCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedStr = prefs.getString('bbc_about_us_cache');
+      if (cachedStr != null) {
+        final data = jsonDecode(cachedStr);
+        setState(() {
+          _companyData = data;
+          _parseCompanyData(data);
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading about us cache: $e');
+    }
+  }
+
   Future<void> _fetchCompanyAboutUs() async {
+    await _loadCache();
+
+    // No need to show fullscreen loader if we have cache or default texts populated!
     setState(() {
-      _isLoading = true;
+      _isLoading = _companyData.isEmpty;
       _errorMessage = null;
     });
 
@@ -82,23 +120,30 @@ class _AboutUsPageState extends State<AboutUsPage> {
             _companyData = data;
             _parseCompanyData(data);
             _isLoading = false;
+            _errorMessage = null;
           });
+
+          await prefs.setString('bbc_about_us_cache', jsonEncode(data));
+          _showSnackBar('Fresh company information loaded');
         } else {
+          _showSnackBar(json['msg'] ?? 'Failed to refresh company information. Showing cached data.');
           setState(() {
-            _errorMessage = json['msg'] ?? 'Failed to load company information';
+            _errorMessage = null;
             _isLoading = false;
           });
         }
       } else {
+        _showSnackBar('Failed to refresh company information. Showing cached data.');
         setState(() {
-          _errorMessage = 'Failed to load company information. Please try again.';
+          _errorMessage = null;
           _isLoading = false;
         });
       }
     } catch (e) {
       debugPrint('About Us error: $e');
+      _showSnackBar('Network error. Showing cached company information.');
       setState(() {
-        _errorMessage = 'Network error: Please check your connection';
+        _errorMessage = null;
         _isLoading = false;
       });
     }
@@ -150,20 +195,6 @@ class _AboutUsPageState extends State<AboutUsPage> {
     };
   }
 
-  void _showSnackBar(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message, style: GoogleFonts.dmSans(fontSize: 13, color: Colors.white)),
-        backgroundColor: _kTextPri,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-        duration: const Duration(seconds: 3),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -194,6 +225,7 @@ class _AboutUsPageState extends State<AboutUsPage> {
                           ),
                         ),
             ),
+            const BbcBottomNavBar(activeTab: BbcTab.about),
           ],
         ),
       ),

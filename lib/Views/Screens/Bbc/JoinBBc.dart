@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'BbcBottomNavBar.dart';
 
 // ─── Brand tokens (identical across all BBC screens) ──────────────────────────
 const _kBrand      = Color(0xFFB0126B);
@@ -61,9 +62,30 @@ class _JoinAsMemberPageState extends State<JoinAsMemberPage> {
     super.dispose();
   }
 
+  Future<void> _loadCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedProfileStr = prefs.getString('bbc_profile_cache');
+      if (cachedProfileStr != null) {
+        final data = jsonDecode(cachedProfileStr);
+        setState(() {
+          _userType = data['user_type']?.toInt() ?? 1;
+          _isApprovedMember = _userType == 2;
+          _userReferralCode = data['referral_code']?.toString() ?? '';
+          _userName = data['name']?.toString() ?? data['person_name']?.toString() ?? 'Member';
+          _userData = data;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading profile cache: $e');
+    }
+  }
+
   Future<void> _checkUserMembership() async {
+    await _loadCache();
+
     setState(() {
-      _isCheckingMembership = true;
+      _isCheckingMembership = _userData == null;
     });
 
     try {
@@ -94,19 +116,31 @@ class _JoinAsMemberPageState extends State<JoinAsMemberPage> {
         if (json['code'] == 200 && json['data'] != null) {
           final data = json['data'];
           
-          // IMPORTANT: user_type = 2 means approved member
-          // user_type = 1 means normal user (not yet approved)
-          _userType = data['user_type']?.toInt() ?? 1;
-          _isApprovedMember = _userType == 2;
-          _userReferralCode = data['referral_code']?.toString() ?? '';
-          _userName = data['name']?.toString() ?? data['person_name']?.toString() ?? 'Member';
-          _userData = data;
-          
-          debugPrint('User Type: $_userType, Is Approved Member: $_isApprovedMember, Referral Code: $_userReferralCode');
+          setState(() {
+            _userType = data['user_type']?.toInt() ?? 1;
+            _isApprovedMember = _userType == 2;
+            _userReferralCode = data['referral_code']?.toString() ?? '';
+            _userName = data['name']?.toString() ?? data['person_name']?.toString() ?? 'Member';
+            _userData = data;
+          });
+
+          await prefs.setString('bbc_profile_cache', jsonEncode(data));
+          _showSnackBar('Fresh profile data loaded');
+        } else {
+          if (_userData != null) {
+            _showSnackBar('Failed to refresh profile. Showing cached data.');
+          }
+        }
+      } else {
+        if (_userData != null) {
+          _showSnackBar('Failed to refresh profile. Showing cached data.');
         }
       }
     } catch (e) {
       debugPrint('Error checking membership: $e');
+      if (_userData != null) {
+        _showSnackBar('Network error. Showing cached profile.');
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -313,6 +347,7 @@ class _JoinAsMemberPageState extends State<JoinAsMemberPage> {
 
   void _showSnackBar(String message) {
     if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message, style: GoogleFonts.dmSans(fontSize: 13, color: Colors.white)),
@@ -365,6 +400,7 @@ $_userName
                       ? _buildApprovedMemberView()
                       : _buildScrollBody(),
             ),
+            const BbcBottomNavBar(activeTab: BbcTab.member),
           ],
         ),
       ),

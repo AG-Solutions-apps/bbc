@@ -17,6 +17,7 @@ import 'dart:io';
 import 'package:flutter/painting.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'BbcBottomNavBar.dart';
 
 // ─── Brand tokens ──────────────────────────────────────────────────────────────
 const _kBrand      = Color(0xFFB0126B);
@@ -42,6 +43,13 @@ const _kAnniversaryRose   = Color(0xFFE84393);
 const String _imageBaseUrl =
     'http://businessboosters.club/public/images/user_images/';
 
+class RateLimitException implements Exception {
+  final String message;
+  RateLimitException(this.message);
+  @override
+  String toString() => message;
+}
+
 class HomePageBbc extends StatefulWidget {
   const HomePageBbc({super.key});
 
@@ -60,6 +68,10 @@ class _HomePageBbcState extends State<HomePageBbc> {
   String? _userId;
   String? _userName;
   bool _showUpdateBar = false;
+  bool _isFetchingMembers = false;
+  DateTime? _lastPressedAt;
+  int _retryCooldownSeconds = 0;
+  Timer? _cooldownTimer;
  
   // Lead creation dialog controllers
   final TextEditingController _leadAmountController = TextEditingController();
@@ -78,10 +90,11 @@ class _HomePageBbcState extends State<HomePageBbc> {
   final FocusNode _searchFocusNode = FocusNode();
   final TextEditingController _searchController = TextEditingController();
   
-  // Carousel/Slider variables
-  late PageController _pageController;
-  int _currentPage = 0;
-  Timer? _autoSlideTimer;
+  bool _isCurrentUserBirthday = false;
+  bool _isCurrentUserAnniversary = false;
+  bool _showCelebrationGif = false;
+  
+
 
 
 Future<void> _checkForUpdate() async {
@@ -104,8 +117,7 @@ Future<void> _checkForUpdate() async {
   void initState() {
     super.initState();
 
-    // ✅ Initialize PageController here
-    _pageController = PageController();
+
     
     _getUserIdAndFetchMembers();
     _fetchSliders();
@@ -127,34 +139,16 @@ Future<void> _checkForUpdate() async {
 
   @override
   void dispose() {
+    _cooldownTimer?.cancel();
     _searchFocusNode.dispose();
     _leadAmountController.dispose();
     _scrollController.dispose();
-    _pageController.dispose(); // ✅ Dispose the page controller
-    _stopAutoSlide();
+
     _searchController.dispose();
     super.dispose();
   }
 
-  void _startAutoSlide() {
-    _stopAutoSlide();
-    if (_sliderItems.isEmpty) return;
-    _autoSlideTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (_sliderItems.isNotEmpty && mounted && _pageController.hasClients) {
-        final nextPage = (_currentPage + 1) % _sliderItems.length;
-        _pageController.animateToPage(
-          nextPage,
-          duration: const Duration(milliseconds: 500),
-          curve: Curves.easeInOut,
-        );
-      }
-    });
-  }
 
-  void _stopAutoSlide() {
-    _autoSlideTimer?.cancel();
-    _autoSlideTimer = null;
-  }
 
   void _closeSearch() {
     _searchFocusNode.unfocus();
@@ -173,6 +167,7 @@ Future<void> _checkForUpdate() async {
 
   // New method to clear all cache and refresh
   Future<void> _clearCacheAndRefresh() async {
+    if (_isRefreshing) return;
     setState(() {
       _isRefreshing = true;
     });
@@ -181,43 +176,48 @@ Future<void> _checkForUpdate() async {
       // Clear local memory cache
       _memberDetailsCache.clear();
 
-      // Clear Flutter image cache
-      PaintingBinding.instance.imageCache.clear();
-      PaintingBinding.instance.imageCache.clearLiveImages();
+      // Safe image cache clear
+      try {
+        PaintingBinding.instance.imageCache.clear();
+        PaintingBinding.instance.imageCache.clearLiveImages();
+      } catch (e) {
+        debugPrint('Image cache clear error: $e');
+      }
 
-      // Clear CachedNetworkImage cache
-      await DefaultCacheManager().emptyCache();
+      // Safe network image cache clear
+      try {
+        await DefaultCacheManager().emptyCache();
+      } catch (e) {
+        debugPrint('Network cache clear error: $e');
+      }
 
-      // Clear temporary files
-      final tempDir = await getTemporaryDirectory();
-      if (tempDir.existsSync()) {
-        await tempDir.delete(recursive: true);
+      // Safe temp directory delete
+      try {
+        final tempDir = await getTemporaryDirectory();
+        if (tempDir.existsSync()) {
+          await tempDir.delete(recursive: true);
+        }
+      } catch (e) {
+        debugPrint('Temp directory delete error: $e');
       }
 
       _showSnackBar('Cache cleared successfully');
-
-      // Reload data
-      await _fetchMembers();
-      await _fetchSliders();
-
-      setState(() {
-        _searchQuery = '';
-      });
-
-      _searchController.clear();
-
-      _stopAutoSlide();
-      _startAutoSlide();
-
-      _showSnackBar('Fresh data loaded');
     } catch (e) {
       debugPrint('Cache clear error: $e');
-      _showSnackBar('Error: $e');
     } finally {
+      // Always fetch data even if cache clearing fails
+      await Future.wait([
+        _fetchMembers(),
+        _fetchSliders(),
+      ]);
+
       if (mounted) {
         setState(() {
+          _searchQuery = '';
           _isRefreshing = false;
         });
+        _searchController.clear();
+        _showSnackBar('Fresh data loaded');
       }
     }
   }
@@ -226,18 +226,23 @@ Future<void> _checkForUpdate() async {
     if (dob == null || dob.isEmpty) return false;
     try {
       final today = DateTime.now();
-      if (dob.contains('-') && dob.length == 10) {
-        final parts = dob.split('-');
+      final separator = dob.contains('-') ? '-' : (dob.contains('/') ? '/' : null);
+      if (separator != null) {
+        final parts = dob.split(separator);
         if (parts.length == 3) {
-          return today.month == int.parse(parts[1]) &&
-              today.day == int.parse(parts[2]);
-        }
-      }
-      if (dob.contains('/')) {
-        final parts = dob.split('/');
-        if (parts.length == 3) {
-          return today.month == int.parse(parts[1]) &&
-              today.day == int.parse(parts[0]);
+          int? day, month;
+          if (parts[0].length == 4) {
+            // YYYY-MM-DD
+            month = int.tryParse(parts[1]);
+            day = int.tryParse(parts[2]);
+          } else if (parts[2].length == 4) {
+            // DD-MM-YYYY
+            month = int.tryParse(parts[1]);
+            day = int.tryParse(parts[0]);
+          }
+          if (month != null && day != null) {
+            return today.month == month && today.day == day;
+          }
         }
       }
     } catch (e) {
@@ -250,18 +255,23 @@ Future<void> _checkForUpdate() async {
     if (doa == null || doa.isEmpty) return false;
     try {
       final today = DateTime.now();
-      if (doa.contains('-') && doa.length == 10) {
-        final parts = doa.split('-');
+      final separator = doa.contains('-') ? '-' : (doa.contains('/') ? '/' : null);
+      if (separator != null) {
+        final parts = doa.split(separator);
         if (parts.length == 3) {
-          return today.month == int.parse(parts[1]) &&
-              today.day == int.parse(parts[2]);
-        }
-      }
-      if (doa.contains('/')) {
-        final parts = doa.split('/');
-        if (parts.length == 3) {
-          return today.month == int.parse(parts[1]) &&
-              today.day == int.parse(parts[0]);
+          int? day, month;
+          if (parts[0].length == 4) {
+            // YYYY-MM-DD
+            month = int.tryParse(parts[1]);
+            day = int.tryParse(parts[2]);
+          } else if (parts[2].length == 4) {
+            // DD-MM-YYYY
+            month = int.tryParse(parts[1]);
+            day = int.tryParse(parts[0]);
+          }
+          if (month != null && day != null) {
+            return today.month == month && today.day == day;
+          }
         }
       }
     } catch (e) {
@@ -270,9 +280,76 @@ Future<void> _checkForUpdate() async {
     return false;
   }
 
+  Future<void> _loadCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedMembersStr = prefs.getString('bbc_members_cache');
+      final cachedDetailsStr = prefs.getString('bbc_member_details_cache');
+
+      if (cachedDetailsStr != null) {
+        final Map<String, dynamic> decodedDetails = jsonDecode(cachedDetailsStr);
+        decodedDetails.forEach((key, value) {
+          if (value is Map<String, dynamic>) {
+            _memberDetailsCache[key] = value;
+          }
+        });
+        
+        // Also populate birthday and anniversary members from the loaded cache
+        _birthdayMembers.clear();
+        _anniversaryMembers.clear();
+      }
+
+      if (cachedMembersStr != null) {
+        final List<dynamic> decodedMembers = jsonDecode(cachedMembersStr);
+        final List<Map<String, dynamic>> loadedMembers = List<Map<String, dynamic>>.from(
+          decodedMembers.map((m) => Map<String, dynamic>.from(m)),
+        );
+        
+        setState(() {
+          _members = loadedMembers;
+          _isLoading = false;
+          
+          // Recalculate birthday/anniversary members from cache details
+          for (var member in _members) {
+            final memberId = member['id'];
+            final cached = _memberDetailsCache[memberId];
+            final wishes = member['wishes']?.toString().toLowerCase() ?? '';
+            final dob = cached?['dob']?.toString();
+            final doa = cached?['doa']?.toString();
+            
+            final isBday = wishes.contains('birthday') || _isBirthdayToday(dob);
+            final isAnni = wishes.contains('anniversary') || _isAnniversaryToday(doa);
+            
+            if (isBday && memberId != _userId) {
+              _birthdayMembers.add(cached != null ? {...member, ...cached} : member);
+            }
+            if (isAnni && memberId != _userId) {
+              _anniversaryMembers.add(cached != null ? {...member, ...cached} : member);
+            }
+          }
+          _checkCurrentUserCelebration();
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading persistent cache: $e');
+    }
+  }
+
   Future<void> _fetchMembers() async {
+    if (_isFetchingMembers) return;
+    _isFetchingMembers = true;
+
+    // Load from cache first if members list is empty
+    if (_members.isEmpty) {
+      await _loadCache();
+    }
+
+    if (_members.isEmpty) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
     setState(() {
-      _isLoading = true;
       _errorMessage = null;
       _birthdayMembers.clear();
       _anniversaryMembers.clear();
@@ -287,10 +364,13 @@ Future<void> _checkForUpdate() async {
           _errorMessage = 'Please login again';
           _isLoading = false;
         });
+        _isFetchingMembers = false;
         return;
       }
 
       List<Map<String, dynamic>> allMembers = [];
+      bool isApiSuccess = false;
+      String? errorMessage;
 
       try {
         final response = await http.post(
@@ -306,12 +386,29 @@ Future<void> _checkForUpdate() async {
           final membersData = json['data'] ?? [];
 
           if (membersData is List) {
+            isApiSuccess = true;
+            final Set<String> seenIds = {};
             for (var member in membersData) {
-              final cached =
-                  _memberDetailsCache[member['id'].toString()];
+              final memberId = member['id']?.toString() ?? '';
+              final cached = _memberDetailsCache[memberId];
+
+              if (seenIds.contains(memberId)) {
+                // Merge wishes if duplicate user exists in API response
+                final existingIndex = allMembers.indexWhere((m) => m['id'] == memberId);
+                if (existingIndex != -1) {
+                  final existingWishes = allMembers[existingIndex]['wishes']?.toString() ?? '';
+                  final newWishes = member['wishes']?.toString() ?? '';
+                  final Set<String> wishesSet = {};
+                  if (existingWishes.isNotEmpty) wishesSet.addAll(existingWishes.split(',').map((w) => w.trim().toLowerCase()));
+                  if (newWishes.isNotEmpty) wishesSet.addAll(newWishes.split(',').map((w) => w.trim().toLowerCase()));
+                  allMembers[existingIndex]['wishes'] = wishesSet.join(', ');
+                }
+                continue;
+              }
+              seenIds.add(memberId);
 
               allMembers.add({
-                'id': member['id']?.toString() ?? '',
+                'id': memberId,
                 'name': member['name']?.toString() ?? 'Unknown User',
                 'mobile': member['mobile']?.toString() ?? '',
                 'whatsapp_number':
@@ -341,45 +438,172 @@ Future<void> _checkForUpdate() async {
                 'referral_code':
                     member['referral_code']?.toString() ?? '',
                 'is_current_user':
-                    member['id'].toString() == _userId,
+                    memberId == _userId,
               });
             }
             debugPrint(
                 'Found ${membersData.length} members from fetch-user API');
+          } else {
+            errorMessage = 'Invalid data format from server';
           }
+        } else if (response.statusCode == 401) {
+          errorMessage = 'Session expired. Please login again.';
+        } else if (response.statusCode == 429) {
+          errorMessage = 'Too many requests. Please try again in a few moments.';
         } else {
-          debugPrint('API Error: ${response.statusCode}');
-          debugPrint('Response body: ${response.body}');
+          errorMessage = 'Server error (${response.statusCode}). Please try again later.';
         }
+      } on SocketException catch (e) {
+        debugPrint('SocketException fetching members: $e');
+        errorMessage = 'No internet connection. Please check your network and retry.';
+      } on TimeoutException catch (e) {
+        debugPrint('TimeoutException fetching members: $e');
+        errorMessage = 'Connection timed out. Please try again.';
       } catch (e) {
         debugPrint('Error fetching members: $e');
+        errorMessage = 'An unexpected error occurred: $e';
+      }
+
+      if (!isApiSuccess) {
+        _startRetryCooldown();
+        _isFetchingMembers = false;
+
+        if (_members.isNotEmpty) {
+          // If we already have members loaded from cache, just show a SnackBar and DO NOT show full-screen error view
+          _showSnackBar(errorMessage != null ? '$errorMessage Showing cached data.' : 'Failed to refresh members. Showing cached data.');
+          setState(() {
+            _errorMessage = null;
+            _isLoading = false;
+            
+            // Re-populate birthdays & anniversaries from the cached data we kept
+            for (var member in _members) {
+              final cached = _memberDetailsCache[member['id']];
+              final wishes = member['wishes']?.toString().toLowerCase() ?? '';
+              final dob = cached?['dob']?.toString();
+              final doa = cached?['doa']?.toString();
+
+              final isBday = wishes.contains('birthday') || _isBirthdayToday(dob);
+              final isAnni = wishes.contains('anniversary') || _isAnniversaryToday(doa);
+
+              if (isBday && member['id'] != _userId && !_birthdayMembers.any((m) => m['id'] == member['id'])) {
+                _birthdayMembers.add(cached != null ? {...member, ...cached} : member);
+              }
+              if (isAnni && member['id'] != _userId && !_anniversaryMembers.any((m) => m['id'] == member['id'])) {
+                _anniversaryMembers.add(cached != null ? {...member, ...cached} : member);
+              }
+            }
+            _checkCurrentUserCelebration();
+          });
+        } else {
+          // Show full-screen error if no cache exists
+          setState(() {
+            _errorMessage = errorMessage ?? 'Failed to load members';
+            _isLoading = false;
+          });
+        }
+        return;
       }
 
       if (allMembers.isEmpty) {
         setState(() {
           _members = [];
           _isLoading = false;
-          _errorMessage = 'No members found';
+          _errorMessage = null; // Clear error to show standard empty view
+          _birthdayMembers.clear();
+          _anniversaryMembers.clear();
         });
+        
+        // Clear persistent cache since the list is empty now
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove('bbc_members_cache');
+        } catch (e) {
+          debugPrint('Error clearing members cache: $e');
+        }
+
+        _isFetchingMembers = false;
         return;
       }
 
       setState(() {
         _members = allMembers;
         _isLoading = false;
+
+        // Immediately re-populate birthday and anniversary lists from local cache details
+        _birthdayMembers.clear();
+        _anniversaryMembers.clear();
+        for (var member in allMembers) {
+          final cached = _memberDetailsCache[member['id']];
+          final wishes = member['wishes']?.toString().toLowerCase() ?? '';
+          final dob = cached?['dob']?.toString();
+          final doa = cached?['doa']?.toString();
+
+          final isBday = wishes.contains('birthday') || _isBirthdayToday(dob);
+          final isAnni = wishes.contains('anniversary') || _isAnniversaryToday(doa);
+
+          if (isBday && member['id'] != _userId) {
+            _birthdayMembers.add(cached != null ? {...member, ...cached} : member);
+          }
+          if (isAnni && member['id'] != _userId) {
+            _anniversaryMembers.add(cached != null ? {...member, ...cached} : member);
+          }
+        }
+        _checkCurrentUserCelebration();
       });
 
+      // Save to persistent cache
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('bbc_members_cache', jsonEncode(allMembers));
+      } catch (e) {
+        debugPrint('Error saving members cache: $e');
+      }
+
+      _showSnackBar('Fresh data loaded from server');
       _loadMissingDetails(token);
     } catch (e) {
       debugPrint('Fetch members error: $e');
-      setState(() {
-        _errorMessage = 'Network error: $e';
-        _isLoading = false;
-      });
+      
+      _startRetryCooldown();
+      if (_members.isNotEmpty) {
+        _showSnackBar('Network error. Showing cached data.');
+        setState(() {
+          _errorMessage = null;
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _errorMessage = 'Network error: $e';
+          _isLoading = false;
+        });
+      }
+    } finally {
+      _isFetchingMembers = false;
     }
   }
 
+  void _startRetryCooldown() {
+    _cooldownTimer?.cancel();
+    setState(() {
+      _retryCooldownSeconds = 10;
+    });
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        if (_retryCooldownSeconds > 0) {
+          _retryCooldownSeconds--;
+        } else {
+          timer.cancel();
+        }
+      });
+    });
+  }
+
   Future<void> _loadMissingDetails(String token) async {
+    bool detailsUpdated = false;
     for (int i = 0; i < _members.length; i++) {
       final memberId = _members[i]['id'];
 
@@ -389,9 +613,7 @@ Future<void> _checkForUpdate() async {
         final details = await _fetchMemberDetails(memberId, token);
         if (details != null && mounted) {
           _memberDetailsCache[memberId] = details;
-
-          final hasBirthday = _isBirthdayToday(details['dob']);
-          final hasAnniversary = _isAnniversaryToday(details['doa']);
+          detailsUpdated = true;
 
           setState(() {
             final index =
@@ -412,27 +634,49 @@ Future<void> _checkForUpdate() async {
               _members[index]['doa'] = details['doa'] ?? '';
             }
 
-            if (hasBirthday) {
-              final memberData = {..._members[index]};
-              if (!_birthdayMembers.any((m) => m['id'] == memberId)) {
-                _birthdayMembers.add(memberData);
-              }
-            }
+            if (index != -1) {
+              final wishes = _members[index]['wishes']?.toString().toLowerCase() ?? '';
+              final hasBirthday = wishes.contains('birthday') || _isBirthdayToday(details['dob']);
+              final hasAnniversary = wishes.contains('anniversary') || _isAnniversaryToday(details['doa']);
 
-            if (hasAnniversary) {
-              final memberData = {..._members[index]};
-              if (!_anniversaryMembers
-                  .any((m) => m['id'] == memberId)) {
-                _anniversaryMembers.add(memberData);
+              if (hasBirthday && memberId != _userId) {
+                final memberData = {..._members[index], ...details};
+                if (!_birthdayMembers.any((m) => m['id'] == memberId)) {
+                  _birthdayMembers.add(memberData);
+                }
+              }
+
+              if (hasAnniversary && memberId != _userId) {
+                final memberData = {..._members[index], ...details};
+                if (!_anniversaryMembers.any((m) => m['id'] == memberId)) {
+                  _anniversaryMembers.add(memberData);
+                }
               }
             }
+            _checkCurrentUserCelebration();
           });
         }
+      } on RateLimitException catch (e) {
+        debugPrint('Rate limit hit in _loadMissingDetails: $e. Stopping detail fetches.');
+        if (mounted) {
+          _startRetryCooldown();
+          _showSnackBar('Rate limit reached. Some member details could not be loaded.');
+        }
+        break; // Stop loop immediately
       } catch (e) {
         debugPrint('Error loading member $memberId: $e');
       }
 
-      await Future.delayed(const Duration(milliseconds: 200));
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
+
+    if (detailsUpdated) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('bbc_member_details_cache', jsonEncode(_memberDetailsCache));
+      } catch (e) {
+        debugPrint('Error saving details cache: $e');
+      }
     }
   }
 
@@ -448,6 +692,10 @@ Future<void> _checkForUpdate() async {
         },
         body: jsonEncode({'user_id': memberId}),
       ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 429) {
+        throw RateLimitException('Rate limit exceeded');
+      }
 
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
@@ -499,6 +747,8 @@ Future<void> _checkForUpdate() async {
           };
         }
       }
+    } on RateLimitException {
+      rethrow;
     } catch (e) {
       debugPrint('Error fetching member details for $memberId: $e');
     }
@@ -593,8 +843,6 @@ Future<void> _checkForUpdate() async {
           );
         });
         
-        _stopAutoSlide();
-        _startAutoSlide();
       }
     } catch (e) {
       debugPrint('Slider Error: $e');
@@ -867,6 +1115,7 @@ Future<void> _checkForUpdate() async {
 
   void _showSnackBar(String message) {
     if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message,
@@ -904,53 +1153,119 @@ Future<void> _checkForUpdate() async {
   Widget build(BuildContext context) {
     final isHeaderCollapsed = _scrollOffset > 80;
 
+    // Dynamically construct a flat list of items to display in the main ScrollView.
+    final List<Map<String, dynamic>> displayItems = [];
+
+    if (_isCurrentUserBirthday || _isCurrentUserAnniversary) {
+      displayItems.add({'type': 'wishing_message'});
+    }
+
+    if (_birthdayMembers.isNotEmpty) {
+      displayItems.add({'type': 'birthday'});
+    }
+    if (_anniversaryMembers.isNotEmpty) {
+      displayItems.add({'type': 'anniversary'});
+    }
+
+    final membersList = _filteredMembers;
+    if (_sliderItems.isNotEmpty) {
+      int memberCount = 0;
+      for (int i = 0; i < membersList.length; i++) {
+        displayItems.add({
+          'type': 'member',
+          'member': membersList[i],
+          'index': i,
+        });
+        memberCount++;
+        // Insert a banner after every 5 members, but only if it's not the very last element
+        if (memberCount % 5 == 0 && i != membersList.length - 1) {
+          displayItems.add({'type': 'banner'});
+        }
+      }
+    } else {
+      for (int i = 0; i < membersList.length; i++) {
+        displayItems.add({
+          'type': 'member',
+          'member': membersList[i],
+          'index': i,
+        });
+      }
+    }
+
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: const SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
         statusBarIconBrightness: Brightness.light,
       ),
-      child: Scaffold(
-        backgroundColor: _kBg,
-        body: Column(
-          children: [
-            _buildHeader(isHeaderCollapsed),
-            _buildBirthdaySection(),
-            _buildAnniversarySection(),
-            _buildSearchBar(),
-            Expanded(
-              child: _isLoading
-                  ? const Center(
-                      child: CircularProgressIndicator(color: _kBrand))
-                  : _errorMessage != null
-                      ? _buildErrorView()
-                      : _filteredMembers.isEmpty
-                          ? _buildEmptyView()
-                          : RefreshIndicator(
-                              onRefresh: _refreshMembers,
-                              color: _kBrand,
-                              child: ListView.builder(
-                                controller: _scrollController,
-                                padding: const EdgeInsets.only(
-                                    top: 8, bottom: 80),
-                                itemCount: _filteredMembers.length +
-                                    (_filteredMembers.length ~/ 5),
-                                itemBuilder: (context, index) {
-                                  if ((index + 1) % 6 == 0 &&
-                                      _sliderItems.isNotEmpty) {
-                                    return _buildBannerCarousel();
-                                  }
-                                  final memberIndex =
-                                      index - (index ~/ 6);
-                                  final member =
-                                      _filteredMembers[memberIndex];
-                                  return _buildMemberCard(
-                                      member, memberIndex);
-                                },
-                              ),
-                            ),
-            ),
-            _buildBottomNav(context),
-          ],
+      child: PopScope(
+        canPop: false,
+        onPopInvoked: (didPop) async {
+          if (didPop) return;
+          final now = DateTime.now();
+          final backButtonHasNotBeenPressedOrExpired =
+              _lastPressedAt == null ||
+                  now.difference(_lastPressedAt!) > const Duration(seconds: 2);
+
+          if (backButtonHasNotBeenPressedOrExpired) {
+            _lastPressedAt = now;
+            _showSnackBar('Press back again to exit');
+          } else {
+            SystemNavigator.pop();
+          }
+        },
+        child: Scaffold(
+          backgroundColor: _kBg,
+          body: Stack(
+            children: [
+              Column(
+                children: [
+                  _buildHeader(isHeaderCollapsed),
+                  _buildSearchBar(),
+                  Expanded(
+                    child: _isLoading
+                        ? const Center(
+                            child: CircularProgressIndicator(color: _kBrand))
+                        : _errorMessage != null
+                            ? _buildErrorView()
+                            : _filteredMembers.isEmpty
+                                ? _buildEmptyView()
+                                : RefreshIndicator(
+                                    onRefresh: _refreshMembers,
+                                    color: _kBrand,
+                                    child: ListView.builder(
+                                      controller: _scrollController,
+                                      padding: const EdgeInsets.only(
+                                          top: 8, bottom: 80),
+                                      physics: const AlwaysScrollableScrollPhysics(),
+                                      itemCount: displayItems.length,
+                                      itemBuilder: (context, index) {
+                                        final item = displayItems[index];
+                                        switch (item['type']) {
+                                          case 'wishing_message':
+                                            return _buildCurrentUserWishingCard();
+                                          case 'birthday':
+                                            return _buildBirthdaySection();
+                                          case 'anniversary':
+                                            return _buildAnniversarySection();
+                                          case 'banner':
+                                            return BbcBannerCarousel(
+                                                sliderItems: _sliderItems);
+                                          case 'member':
+                                            return _buildMemberCard(
+                                                item['member'], item['index']);
+                                          default:
+                                            return const SizedBox.shrink();
+                                        }
+                                      },
+                                    ),
+                                  ),
+                  ),
+                  const BbcBottomNavBar(activeTab: BbcTab.home),
+                ],
+              ),
+              if (_showCelebrationGif) const ConfettiWidget(),
+            ],
+          ),
         ),
       ),
     );
@@ -1040,16 +1355,23 @@ Future<void> _checkForUpdate() async {
                     ),
                   ),
                   // Refresh Button
+                  // Refresh Button
                   GestureDetector(
-                    onTap: _isRefreshing ? null : _clearCacheAndRefresh,
+                    onTap: (_isRefreshing || _retryCooldownSeconds > 0)
+                        ? null
+                        : _clearCacheAndRefresh,
                     child: Container(
                       width: isCollapsed ? 40 : 45,
                       height: isCollapsed ? 40 : 45,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Colors.white.withOpacity(0.2),
+                        color: (_isRefreshing || _retryCooldownSeconds > 0)
+                            ? Colors.white.withOpacity(0.08)
+                            : Colors.white.withOpacity(0.2),
                         border: Border.all(
-                          color: Colors.white.withOpacity(0.3),
+                          color: (_isRefreshing || _retryCooldownSeconds > 0)
+                              ? Colors.white.withOpacity(0.1)
+                              : Colors.white.withOpacity(0.3),
                           width: 1.5,
                         ),
                       ),
@@ -1062,11 +1384,22 @@ Future<void> _checkForUpdate() async {
                                 color: Colors.white,
                               ),
                             )
-                          : Icon(
-                              Icons.refresh_rounded,
-                              color: Colors.white,
-                              size: isCollapsed ? 20 : 24,
-                            ),
+                          : _retryCooldownSeconds > 0
+                              ? Center(
+                                  child: Text(
+                                    '${_retryCooldownSeconds}s',
+                                    style: GoogleFonts.inter(
+                                      color: Colors.white.withOpacity(0.7),
+                                      fontSize: isCollapsed ? 10 : 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                )
+                              : Icon(
+                                  Icons.refresh_rounded,
+                                  color: Colors.white,
+                                  size: isCollapsed ? 20 : 24,
+                                ),
                     ),
                   ),
                 ],
@@ -1121,7 +1454,10 @@ Future<void> _checkForUpdate() async {
             ),
             if (_searchQuery.isNotEmpty)
               IconButton(
-                onPressed: () => setState(() => _searchQuery = ''),
+                onPressed: () {
+                  _searchController.clear();
+                  setState(() => _searchQuery = '');
+                },
                 icon: Icon(Icons.close_rounded,
                     size: 20, color: _kTextMuted),
               ),
@@ -1172,7 +1508,7 @@ Future<void> _checkForUpdate() async {
           ),
           const SizedBox(height: 8),
           SizedBox(
-            height: 180,
+            height: 190,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1229,7 +1565,7 @@ Future<void> _checkForUpdate() async {
           ),
           const SizedBox(height: 8),
           SizedBox(
-            height: 180,
+            height: 190,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1252,76 +1588,58 @@ Future<void> _checkForUpdate() async {
   Widget _buildCelebrationCard(
       Map<String, dynamic> member, bool isBirthday) {
     final imageLoaded = member['image_loaded'] ?? false;
-    final colors = isBirthday
-        ? [_kBirthdayGold, _kBirthdayOrange, _kBirthdayPink]
-        : [_kAnniversaryPurple, _kAnniversaryRose];
+    final badgeColor = isBirthday ? const Color(0xFFF96D34) : const Color(0xFFE91E63);
+    final tagBgColor = isBirthday ? const Color(0xFFFFB300).withOpacity(0.2) : const Color(0xFFE91E63).withOpacity(0.2);
+    final tagTextColor = isBirthday ? const Color(0xFFFFD54F) : const Color(0xFFF48FB1);
+
+    final screenWidth = MediaQuery.of(context).size.width;
+    final cardWidth = screenWidth - 32;
 
     return Container(
-      width: 160,
-      margin: const EdgeInsets.only(right: 12),
+      width: cardWidth,
+      height: 180,
+      margin: const EdgeInsets.only(right: 16, bottom: 6),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            colors[0].withOpacity(0.15),
-            colors[1].withOpacity(0.1)
-          ],
+        borderRadius: BorderRadius.circular(24),
+        image: DecorationImage(
+          image: AssetImage(isBirthday
+              ? 'assets/images/birthday_card_bg.png'
+              : 'assets/images/anniversary_card_bg.png'),
+          fit: BoxFit.cover,
         ),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-            color: colors[0].withOpacity(0.3), width: 1.5),
         boxShadow: [
           BoxShadow(
-              color: colors[1].withOpacity(0.15),
+              color: Colors.black.withOpacity(0.12),
               blurRadius: 10,
               offset: const Offset(0, 4))
         ],
       ),
-      child: Stack(
+      child: Row(
         children: [
-          Positioned(
-            top: 0,
-            right: 0,
-            child: Container(
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
-                color: colors[0].withOpacity(0.2),
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: 0,
-            left: 0,
-            child: Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: colors[2 < colors.length ? 2 : 1]
-                    .withOpacity(0.15),
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
+          // Left side: user profile and actions (fixed width to prevent layout overflow)
+          Container(
+            width: 145,
+            padding: const EdgeInsets.fromLTRB(16, 14, 4, 14),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
+                // Avatar with Badge Stack
                 Stack(
                   alignment: Alignment.bottomRight,
                   children: [
                     Container(
-                      width: 70,
-                      height: 70,
+                      width: 58,
+                      height: 58,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(color: colors[0], width: 2),
+                        border: Border.all(color: Colors.white, width: 2.5),
                         boxShadow: [
                           BoxShadow(
-                              color: colors[1].withOpacity(0.3),
-                              blurRadius: 8)
+                            color: Colors.black.withOpacity(0.15),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
+                          )
                         ],
                       ),
                       child: ClipOval(
@@ -1332,8 +1650,8 @@ Future<void> _checkForUpdate() async {
                                     .isNotEmpty
                             ? Image.network(
                                 member['profile_image'],
-                                width: 70,
-                                height: 70,
+                                width: 54,
+                                height: 54,
                                 fit: BoxFit.cover,
                                 errorBuilder: (_, __, ___) =>
                                     _buildCelebrationAvatarText(
@@ -1346,80 +1664,127 @@ Future<void> _checkForUpdate() async {
                     Container(
                       padding: const EdgeInsets.all(4),
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(colors: colors),
+                        color: badgeColor,
                         shape: BoxShape.circle,
-                        border: Border.all(
-                            color: Colors.white, width: 1.5),
+                        border: Border.all(color: Colors.white, width: 1.5),
                       ),
                       child: Icon(
                         isBirthday
                             ? Icons.cake_rounded
-                            : Icons.favorite_rounded,
-                        size: 14,
+                            : Icons.people_rounded,
+                        size: 10,
                         color: Colors.white,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  member['name'].length > 15
-                      ? '${member['name'].substring(0, 12)}...'
-                      : member['name'],
-                  style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: _kTextPri),
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                
+                // Name and Tag Column
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      member['name'].length > 15
+                          ? '${member['name'].substring(0, 12)}...'
+                          : member['name'],
+                      style: GoogleFonts.poppins(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 3),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: tagBgColor,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        member['occupation'] == 'Loading...'
+                            ? 'Member'
+                            : member['occupation'],
+                        style: GoogleFonts.dmSans(
+                            fontSize: 9,
+                            color: tagTextColor,
+                            fontWeight: FontWeight.w700),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  member['occupation'] == 'Loading...'
-                      ? 'Business Professional'
-                      : member['occupation'],
-                  style: GoogleFonts.inter(
-                      fontSize: 10,
-                      color: colors[0],
-                      fontWeight: FontWeight.w500),
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 8),
+
+                // "Wish Now" Capsule Button
                 GestureDetector(
                   onTap: () => isBirthday
                       ? _showBirthdayWishDialog(member)
                       : _showAnniversaryWishDialog(member),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
+                        horizontal: 14, vertical: 7),
                     decoration: BoxDecoration(
-                      gradient: LinearGradient(colors: colors),
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.08),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        )
+                      ],
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                            isBirthday
-                                ? Icons.celebration_rounded
-                                : Icons.favorite_rounded,
-                            size: 12,
-                            color: Colors.white),
-                        const SizedBox(width: 4),
-                        Text('Wish',
-                            style: GoogleFonts.inter(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white)),
+                        const Icon(
+                            Icons.celebration_rounded,
+                            size: 13,
+                            color: Color(0xFFE91E63)),
+                        const SizedBox(width: 5),
+                       TweenAnimationBuilder<double>(
+  tween: Tween(begin: 0, end: 5),
+  duration: const Duration(milliseconds: 700),
+  curve: Curves.easeInOut,
+  builder: (context, value, child) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'Wish Now',
+          style: GoogleFonts.poppins(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: const Color(0xFFE91E63),
+            letterSpacing: 0.1,
+          ),
+        ),
+        const SizedBox(width: 3),
+        Transform.translate(
+          offset: Offset(value, 0),
+          child: const Icon(
+            Icons.arrow_forward_rounded,
+            size: 14,
+            color: Color(0xFFE91E63),
+          ),
+        ),
+      ],
+    );
+  },
+)
                       ],
                     ),
                   ),
                 ),
               ],
             ),
+          ),
+          
+          // Right side: Spacer for background illustration
+          const Expanded(
+            child: SizedBox.shrink(),
           ),
         ],
       ),
@@ -1428,8 +1793,8 @@ Future<void> _checkForUpdate() async {
 
   Widget _buildCelebrationAvatarText(String name, bool isBirthday) {
     return Container(
-      width: 70,
-      height: 70,
+      width: 58,
+      height: 58,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         gradient: LinearGradient(
@@ -1444,7 +1809,7 @@ Future<void> _checkForUpdate() async {
         child: Text(
           name.isNotEmpty ? name[0].toUpperCase() : 'U',
           style: const TextStyle(
-              fontSize: 28,
+              fontSize: 22,
               fontWeight: FontWeight.w600,
               color: Colors.white),
         ),
@@ -1461,151 +1826,12 @@ Future<void> _checkForUpdate() async {
   void _showWishDialog(Map<String, dynamic> member, bool isBirthday) {
     showDialog(
       context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(28)),
-        backgroundColor: Colors.white,
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: isBirthday
-                        ? [_kBirthdayGold, _kBirthdayOrange]
-                        : [_kAnniversaryPurple, _kAnniversaryRose],
-                  ),
-                ),
-                child: Center(
-                  child: Icon(
-                    isBirthday
-                        ? Icons.cake_rounded
-                        : Icons.favorite_rounded,
-                    size: 40,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                isBirthday ? 'Happy Birthday!' : 'Happy Anniversary!',
-                style: GoogleFonts.poppins(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                  color: isBirthday
-                      ? _kBirthdayOrange
-                      : _kAnniversaryPurple,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(member['name'],
-                  style: GoogleFonts.poppins(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: _kTextPri)),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                margin: const EdgeInsets.symmetric(horizontal: 16),
-                decoration: BoxDecoration(
-                  color: (isBirthday
-                          ? _kBirthdayGold
-                          : _kAnniversaryPurple)
-                      .withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Text(
-                  'Wish ${member['name']} a very ${isBirthday ? 'happy birthday' : 'happy anniversary'}! Send your warm wishes and celebrate their special day.',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.inter(
-                      fontSize: 13, color: _kTextSec, height: 1.4),
-                ),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(context),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: _kBorder),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14)),
-                      ),
-                      child: Text('Close',
-                          style: GoogleFonts.inter(
-                              fontWeight: FontWeight.w500)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        _sendWish(member, isBirthday);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: isBirthday
-                            ? _kBirthdayOrange
-                            : _kAnniversaryPurple,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14)),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.send_rounded,
-                              size: 18, color: Colors.white),
-                          const SizedBox(width: 6),
-                          Text('Send Wish',
-                              style: GoogleFonts.inter(
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white)),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
+      builder: (context) => WishDialog(
+        member: member,
+        isBirthday: isBirthday,
+        senderName: _userName ?? 'Member',
       ),
     );
-  }
-
-  void _sendWish(Map<String, dynamic> member, bool isBirthday) {
-    final mobile = member['whatsapp_number'] ?? member['mobile'];
-    if (mobile != null && mobile.isNotEmpty) {
-      String cleanMobile = mobile.replaceAll(RegExp(r'[^0-9]'), '');
-      if (cleanMobile.startsWith('0'))
-        cleanMobile = cleanMobile.substring(1);
-      if (!cleanMobile.startsWith('91'))
-        cleanMobile = '91$cleanMobile';
-
-      final message = isBirthday
-          ? Uri.encodeComponent(
-              '🎂 Happy Birthday ${member['name']}! 🎉🥳\n\nWishing you a fantastic year ahead filled with success, happiness, and prosperity.\n\nWarm Regards,\nBusiness Boosters Club')
-          : Uri.encodeComponent(
-              '💕 Happy Anniversary ${member['name']}! 💑\n\nWishing you both a lifetime of love, happiness, and togetherness.\n\nWarm Regards,\nBusiness Boosters Club');
-
-      final Uri whatsappUri =
-          Uri.parse('https://wa.me/$cleanMobile?text=$message');
-      canLaunchUrl(whatsappUri).then((canLaunch) {
-        if (canLaunch) {
-          launchUrl(whatsappUri);
-        } else {
-          _showSnackBar('WhatsApp not installed');
-        }
-      });
-    } else {
-      _showSnackBar('No mobile number available');
-    }
   }
 
   Widget _buildErrorView() {
@@ -1615,18 +1841,28 @@ Future<void> _checkForUpdate() async {
         children: [
           Icon(Icons.error_outline, size: 64, color: _kTextMuted),
           const SizedBox(height: 16),
-          Text(_errorMessage!,
-              style:
-                  GoogleFonts.inter(fontSize: 14, color: _kTextSec)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              _errorMessage!,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(fontSize: 14, color: _kTextSec),
+            ),
+          ),
           const SizedBox(height: 16),
           ElevatedButton(
-            onPressed: _fetchMembers,
+            onPressed: (_retryCooldownSeconds > 0 || _isLoading)
+                ? null
+                : _fetchMembers,
             style: ElevatedButton.styleFrom(
               backgroundColor: _kBrand,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
             ),
-            child: Text('Retry',
+            child: Text(
+                _retryCooldownSeconds > 0
+                    ? 'Retry in ${_retryCooldownSeconds}s'
+                    : 'Retry',
                 style: GoogleFonts.inter(color: Colors.white)),
           ),
         ],
@@ -1854,6 +2090,34 @@ Future<void> _checkForUpdate() async {
                           ),
                       ],
                     ),
+                    if (isBirthdayWish && isAnniversaryWish) ...[
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: _kBrandLight,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                              color: _kBrand.withOpacity(0.3), width: 1),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.celebration_rounded,
+                                size: 12, color: _kBrand),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Double Celebration! 🎂💕',
+                              style: GoogleFonts.inter(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700,
+                                  color: _kBrand),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 6),
                     _infoRow(
                       Icons.business_center_rounded,
@@ -1888,52 +2152,54 @@ Future<void> _checkForUpdate() async {
                       fontSize: 11,
                     ),
                     const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.topRight,
-                      child: GestureDetector(
-                        onTap: () {
-                          _closeSearch();
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ProfileDetailPage(
-                                  memberData: member),
-                            ),
-                          );
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                                colors: [_kBrand, _kPlum]),
-                            borderRadius:
-                                BorderRadius.circular(14),
-                            boxShadow: [
-                              BoxShadow(
-                                color: _kBrand.withOpacity(0.25),
-                                blurRadius: 8,
-                                offset: const Offset(0, 3),
-                              )
-                            ],
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.visibility,
-                                  color: Colors.white, size: 14),
-                              const SizedBox(width: 4),
-                              Text(
-                                'View',
-                                style: GoogleFonts.inter(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.white),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        
+                        GestureDetector(
+                          onTap: () {
+                            _closeSearch();
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ProfileDetailPage(
+                                    memberData: member),
                               ),
-                            ],
+                            );
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                  colors: [_kBrand, _kPlum]),
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: _kBrand.withOpacity(0.25),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 3),
+                                )
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.visibility,
+                                    color: Colors.white, size: 14),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'View',
+                                  style: GoogleFonts.inter(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ),
                   ],
                 ),
@@ -2028,110 +2294,193 @@ Future<void> _checkForUpdate() async {
     );
   }
 
-  Widget _buildBottomNav(BuildContext context) {
+
+
+  Widget _buildBannerCarousel() {
+    return BbcBannerCarousel(sliderItems: _sliderItems);
+  }
+
+  void _checkCurrentUserCelebration() {
+    bool bday = false;
+    bool anni = false;
+    
+    for (var member in _members) {
+      if (member['id'] == _userId) {
+        final cached = _memberDetailsCache[_userId];
+        final wishes = member['wishes']?.toString().toLowerCase() ?? '';
+        final dob = cached?['dob']?.toString() ?? member['dob']?.toString();
+        final doa = cached?['doa']?.toString() ?? member['doa']?.toString();
+
+        bday = wishes.contains('birthday') || _isBirthdayToday(dob);
+        anni = wishes.contains('anniversary') || _isAnniversaryToday(doa);
+        break;
+      }
+    }
+    
+    if (bday || anni) {
+      if (!_isCurrentUserBirthday && !_isCurrentUserAnniversary) {
+        setState(() {
+          _isCurrentUserBirthday = bday;
+          _isCurrentUserAnniversary = anni;
+          _showCelebrationGif = true;
+        });
+        // Hide celebration GIF overlay after 10 seconds
+        Timer(const Duration(seconds: 10), () {
+          if (mounted) {
+            setState(() {
+              _showCelebrationGif = false;
+            });
+          }
+        });
+      }
+    }
+  }
+
+  Widget _buildCurrentUserWishingCard() {
+    if (!_isCurrentUserBirthday && !_isCurrentUserAnniversary) return const SizedBox.shrink();
+    
+    final title = _isCurrentUserBirthday 
+        ? 'Happy Birthday, ${_userName ?? "Member"}! 🎂'
+        : 'Happy Anniversary, ${_userName ?? "Member"}! 💕';
+        
+    final message = _isCurrentUserBirthday
+        ? 'We wish you a fantastic year ahead filled with success, good health, and happiness! Enjoy your special day! 🎉'
+        : 'Wishing you another year of love, laughter, and happiness together. Happy Anniversary! 🥂';
+
+    final gradient = _isCurrentUserBirthday
+        ? const LinearGradient(colors: [_kBirthdayOrange, _kBirthdayPink])
+        : const LinearGradient(colors: [_kAnniversaryPurple, _kAnniversaryRose]);
+
     return Container(
-      height: 65,
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.white,
+        gradient: gradient,
+        borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.08),
-            blurRadius: 12,
-            offset: const Offset(0, -4),
-          )
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
         ],
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.home_filled, color: _kBrand, size: 22),
-              const SizedBox(height: 4),
-              Text('Home',
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: GoogleFonts.poppins(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  message,
                   style: GoogleFonts.inter(
-                      fontSize: 10,
-                      color: _kBrand,
-                      fontWeight: FontWeight.w500)),
-            ],
-          ),
-          GestureDetector(
-            onTap: () {
-              _closeSearch();
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const JoinAsMemberPage()),
-              );
-            },
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Image.asset('assets/images/bbclogo.png',
-                    width: 30, height: 30),
-                const SizedBox(height: 4),
-                Text('Member',
-                    style: GoogleFonts.inter(
-                        fontSize: 10,
-                        color: _kTextMuted,
-                        fontWeight: FontWeight.w500)),
+                    fontSize: 12,
+                    color: Colors.white.withOpacity(0.9),
+                    height: 1.4,
+                  ),
+                ),
               ],
             ),
           ),
-          GestureDetector(
-            onTap: () {
-              _closeSearch();
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const AboutUsPage()),
-              );
-            },
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.link, color: _kTextMuted, size: 22),
-                const SizedBox(height: 4),
-                Text('About',
-                    style: GoogleFonts.inter(
-                        fontSize: 10,
-                        color: _kTextMuted,
-                        fontWeight: FontWeight.w500)),
-              ],
-            ),
-          ),
-          GestureDetector(
-            onTap: () {
-              _closeSearch();
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const ProfilePageBBcc()),
-              );
-            },
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.person_outline,
-                    color: _kTextMuted, size: 22),
-                const SizedBox(height: 4),
-                Text('Profile',
-                    style: GoogleFonts.inter(
-                        fontSize: 10,
-                        color: _kTextMuted,
-                        fontWeight: FontWeight.w500)),
-              ],
-            ),
-          ),
+          const SizedBox(width: 12),
+          const Text('🎉', style: TextStyle(fontSize: 40)),
         ],
       ),
     );
   }
+}
 
-  Widget _buildBannerCarousel() {
-    if (_sliderItems.isEmpty) return const SizedBox.shrink();
-    
+class BbcBannerCarousel extends StatefulWidget {
+  final List<Map<String, dynamic>> sliderItems;
+
+  const BbcBannerCarousel({
+    super.key,
+    required this.sliderItems,
+  });
+
+  @override
+  State<BbcBannerCarousel> createState() => _BbcBannerCarouselState();
+}
+
+class _BbcBannerCarouselState extends State<BbcBannerCarousel> {
+  late PageController _pageController;
+  int _currentPage = 0;
+  Timer? _autoSlideTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+    _startAutoSlide();
+  }
+
+  @override
+  void dispose() {
+    _autoSlideTimer?.cancel();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _startAutoSlide() {
+    _stopAutoSlide();
+    if (widget.sliderItems.isEmpty) return;
+    _autoSlideTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      if (widget.sliderItems.isNotEmpty && mounted && _pageController.hasClients) {
+        final nextPage = (_currentPage + 1) % widget.sliderItems.length;
+        _pageController.animateToPage(
+          nextPage,
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeInOut,
+        );
+      }
+    });
+  }
+
+  void _stopAutoSlide() {
+    _autoSlideTimer?.cancel();
+    _autoSlideTimer = null;
+  }
+
+  Future<void> _launchUrl(String urlString) async {
+    if (urlString.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No link available for this banner')),
+      );
+      return;
+    }
+    final Uri url = Uri.parse(urlString);
+    try {
+      if (await canLaunchUrl(url)) {
+        await launchUrl(url, mode: LaunchMode.externalApplication);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not launch $urlString')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error launching link: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.sliderItems.isEmpty) return const SizedBox.shrink();
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       height: 160,
@@ -2154,12 +2503,12 @@ Future<void> _checkForUpdate() async {
                 _currentPage = page;
               });
             },
-            itemCount: _sliderItems.length,
+            itemCount: widget.sliderItems.length,
             itemBuilder: (context, index) {
-              final sliderItem = _sliderItems[index];
+              final sliderItem = widget.sliderItems[index];
               final imageUrl = sliderItem['imageUrl'] ?? '';
               final link = sliderItem['link'] ?? '';
-              
+
               return GestureDetector(
                 onTap: () => _launchUrl(link),
                 child: ClipRRect(
@@ -2191,8 +2540,7 @@ Future<void> _checkForUpdate() async {
               );
             },
           ),
-          
-          if (_sliderItems.length > 1)
+          if (widget.sliderItems.length > 1)
             Positioned(
               bottom: 12,
               left: 0,
@@ -2200,7 +2548,7 @@ Future<void> _checkForUpdate() async {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(
-                  _sliderItems.length,
+                  widget.sliderItems.length,
                   (index) => Container(
                     margin: const EdgeInsets.symmetric(horizontal: 4),
                     width: 8,
@@ -2216,6 +2564,313 @@ Future<void> _checkForUpdate() async {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+class WishDialog extends StatefulWidget {
+  final Map<String, dynamic> member;
+  final bool isBirthday;
+  final String senderName;
+
+  const WishDialog({
+    super.key,
+    required this.member,
+    required this.isBirthday,
+    required this.senderName,
+  });
+
+  @override
+  State<WishDialog> createState() => _WishDialogState();
+}
+
+class _WishDialogState extends State<WishDialog> {
+  final TextEditingController _textCtrl = TextEditingController();
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchPromptAndGenerateText();
+  }
+
+  Future<void> _fetchPromptAndGenerateText() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('bbc_token');
+
+      final response = await http.get(
+        Uri.parse('https://businessboosters.club/public/api/fetch-message-prompt'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      String wishText = '';
+      bool useGemini = false;
+      String promptTemplate = '';
+      String apiKey = '';
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        final data = json['data'] ?? json;
+        final promptStatus = data['prompt_status']?.toString().toLowerCase() ?? 'no';
+        apiKey = data['api_key'] ?? data['gemini_api_key'] ?? 'AIzaSyAeg_D1p3v1fgPn7EyGf40e49GkjVVo7L8';
+        
+        promptTemplate = widget.isBirthday
+            ? (data['prompt_birthday']?.toString() ?? '')
+            : (data['prompt_anniversary']?.toString() ?? '');
+
+        if (promptStatus == 'yes') {
+          useGemini = true;
+        }
+      }
+
+      final recipientName = widget.member['name'] ?? 'Member';
+      final senderName = widget.senderName;
+
+      // Replace placeholders in the prompt template
+      String processedPrompt = promptTemplate
+          .replaceAll('[Recipient]', recipientName)
+          .replaceAll('[Sender]', senderName)
+          .replaceAll('Recipient', recipientName)
+          .replaceAll('Sender', senderName);
+
+      if (useGemini && processedPrompt.isNotEmpty && apiKey.isNotEmpty) {
+        String queryText = processedPrompt + 
+            "\n\nWrite a highly warm, personalized, unique wish from '$senderName' to '$recipientName'. "
+            "Use natural formatting with paragraph breaks, include relevant emojis, and vary the wording so it is unique. "
+            "Do not use markdown formatting, quotes, or asterisks (*).";
+
+        final geminiResponse = await http.post(
+          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'contents': [
+              {
+                'parts': [
+                  {'text': queryText}
+                ]
+              }
+            ],
+            'generationConfig': {
+              'temperature': 1.0
+            }
+          }),
+        );
+
+        if (geminiResponse.statusCode == 200) {
+          final geminiJson = jsonDecode(geminiResponse.body);
+          final generatedText = geminiJson['candidates']?[0]?['content']?['parts']?[0]?['text']?.toString();
+          if (generatedText != null && generatedText.trim().isNotEmpty) {
+            wishText = generatedText.trim();
+          }
+        } else {
+          debugPrint('Gemini API failed with status ${geminiResponse.statusCode}: ${geminiResponse.body}. Falling back to prompt.');
+        }
+      }
+
+      if (wishText.isEmpty) {
+        wishText = processedPrompt;
+      }
+
+      if (wishText.isEmpty) {
+        wishText = widget.isBirthday
+            ? '🎂 Happy Birthday $recipientName! 🎉🥳\n\nWishing you a fantastic year ahead filled with success, happiness, and prosperity.\n\nWarm Regards,\n$senderName'
+            : '💕 Happy Anniversary $recipientName! 💑\n\nWishing you both a lifetime of love, happiness, and togetherness.\n\nWarm Regards,\n$senderName';
+      }
+
+      if (mounted) {
+        setState(() {
+          _textCtrl.text = wishText;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error generating wish: $e');
+      final recipientName = widget.member['name'] ?? 'Member';
+      if (mounted) {
+        setState(() {
+          _textCtrl.text = widget.isBirthday
+              ? 'Happy Birthday, $recipientName! 🎂'
+              : 'Happy Anniversary, $recipientName! 💕';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  void _sendWish() async {
+    final mobile = widget.member['whatsapp_number'] ?? widget.member['mobile'];
+    if (mobile == null || mobile.toString().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('WhatsApp number is not available')),
+      );
+      return;
+    }
+    
+    String cleanMobile = mobile.toString().replaceAll(RegExp(r'[^\d]'), '');
+    if (!cleanMobile.startsWith('91') && cleanMobile.length == 10) {
+      cleanMobile = '91$cleanMobile';
+    }
+
+    final message = Uri.encodeComponent(_textCtrl.text.trim());
+    final url = 'https://wa.me/$cleanMobile?text=$message';
+
+    try {
+      if (await canLaunchUrl(Uri.parse(url))) {
+        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      } else {
+        await launchUrl(Uri.parse(url), mode: LaunchMode.platformDefault);
+      }
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      debugPrint('Error launching WhatsApp: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open WhatsApp')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = widget.isBirthday
+        ? [const Color(0xFFF96D34), const Color(0xFFE5A93C)]
+        : [const Color(0xFFE91E63), const Color(0xFFC4156E)];
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      backgroundColor: Colors.white,
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: colors[0].withOpacity(0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    widget.isBirthday ? Icons.cake_rounded : Icons.favorite_rounded,
+                    color: colors[0],
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.isBirthday ? 'Happy Birthday!' : 'Happy Anniversary!',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black,
+                        ),
+                      ),
+                      Text(
+                        'To: ${widget.member['name']}',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            if (_loading)
+              Container(
+                height: 120,
+                alignment: Alignment.center,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(color: colors[0]),
+                    const SizedBox(height: 14),
+                    Text(
+                      'Generating custom wish...',
+                      style: GoogleFonts.inter(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              )
+            else ...[
+              TextField(
+                controller: _textCtrl,
+                maxLines: 6,
+                minLines: 4,
+                style: GoogleFonts.inter(fontSize: 13, height: 1.4, color: Colors.black),
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: Colors.grey[50],
+                  contentPadding: const EdgeInsets.all(16),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: Colors.grey[200]!),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: colors[0]),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: Colors.grey[200]!),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: Colors.grey[300]!),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Text(
+                        'Close',
+                        style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: Colors.grey[700]),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _sendWish,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: colors[0],
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.send_rounded, size: 14, color: Colors.white),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Send Wish',
+                            style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
