@@ -18,6 +18,8 @@ class BbcBottomNavBar extends StatelessWidget {
   void _navigateToTab(BuildContext context, BbcTab tab) {
     if (activeTab == tab) return;
 
+    FocusManager.instance.primaryFocus?.unfocus();
+
     PageRouteBuilder _buildPageRoute(Widget page) {
       return PageRouteBuilder(
         pageBuilder: (_, __, ___) => page,

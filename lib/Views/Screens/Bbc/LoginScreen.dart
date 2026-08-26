@@ -443,6 +443,14 @@ class _LoginScreenState extends State<LoginScreen> {
         final token = data['token']?.toString() ?? '';
         final user = data['user'] as Map<String, dynamic>? ?? {};
 
+        final status = user['status']?.toString().toLowerCase();
+        final userStatus = user['user_status']?.toString().toLowerCase();
+        if (status == 'inactive' || status == '0' || userStatus == 'inactive' || userStatus == '0') {
+          _snack('Your account is inactive. Please contact admin.');
+          setState(() => _loading = false);
+          return;
+        }
+
         await _saveSession(token: token, user: user);
 
         if (mounted) {

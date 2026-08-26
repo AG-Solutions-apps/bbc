@@ -17,7 +17,10 @@ import 'dart:io';
 import 'package:flutter/painting.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'BbcConfig.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'BbcBottomNavBar.dart';
+import 'dart:ui' show ImageFilter;
 
 // ─── Brand tokens ──────────────────────────────────────────────────────────────
 const _kBrand      = Color(0xFFB0126B);
@@ -40,8 +43,7 @@ const _kAnniversaryPurple = Color(0xFF9B59B6);
 const _kAnniversaryRose   = Color(0xFFE84393);
 
 // Base URL for images
-const String _imageBaseUrl =
-    'http://businessboosters.club/public/images/user_images/';
+const String _imageBaseUrl = BbcConfig.imageBaseUrl;
 
 class RateLimitException implements Exception {
   final String message;
@@ -170,9 +172,23 @@ Future<void> _checkForUpdate() async {
     if (_isRefreshing) return;
     setState(() {
       _isRefreshing = true;
+      // Clear celebration states immediately on refresh
+      _isCurrentUserBirthday = false;
+      _isCurrentUserAnniversary = false;
+      _showCelebrationGif = false;
+      
+      // Reset memory lists
+      _members.clear();
+      _birthdayMembers.clear();
+      _anniversaryMembers.clear();
     });
 
     try {
+      // Clear SharedPreferences persistent cache
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('bbc_members_cache');
+      await prefs.remove('bbc_member_details_cache');
+
       // Clear local memory cache
       _memberDetailsCache.clear();
 
@@ -374,7 +390,7 @@ Future<void> _checkForUpdate() async {
 
       try {
         final response = await http.post(
-          Uri.parse('https://businessboosters.club/public/api/fetch-user'),
+          Uri.parse('${BbcConfig.apiBaseUrl}/fetch-user'),
           headers: {
             'Authorization': 'Bearer $token',
             'Content-Type': 'application/json',
@@ -685,7 +701,7 @@ Future<void> _checkForUpdate() async {
     try {
       final response = await http.post(
         Uri.parse(
-            'https://businessboosters.club/public/api/fetch-user-by-id'),
+            '${BbcConfig.apiBaseUrl}/fetch-user-by-id'),
         headers: {
           'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
@@ -783,7 +799,7 @@ Future<void> _checkForUpdate() async {
       final request = http.MultipartRequest(
         'POST',
         Uri.parse(
-            'https://businessboosters.club/public/api/create-lead'),
+            '${BbcConfig.apiBaseUrl}/create-lead'),
       );
 
       request.headers['Authorization'] = 'Bearer $token';
@@ -821,7 +837,7 @@ Future<void> _checkForUpdate() async {
 
       final response = await http.post(
         Uri.parse(
-            'https://businessboosters.club/public/api/fetch-slider'),
+            '${BbcConfig.apiBaseUrl}/fetch-slider'),
         headers: {'Authorization': 'Bearer $token'},
       );
 
@@ -835,7 +851,7 @@ Future<void> _checkForUpdate() async {
         setState(() {
           _sliderItems = List<Map<String, dynamic>>.from(
             data.map((e) => {
-              'imageUrl': 'https://businessboosters.club/public/images/slider_images/${e['slider_image']}',
+              'imageUrl': '${BbcConfig.sliderImageBaseUrl}${e['slider_image']}',
               'link': e['slider_link']?.toString() ?? '',
               'heading': e['slider_heading']?.toString() ?? '',
               'buttonText': e['slider_button_text']?.toString() ?? '',
@@ -1118,12 +1134,32 @@ Future<void> _checkForUpdate() async {
     ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message,
-            style: GoogleFonts.inter(fontSize: 13, color: Colors.white)),
-        backgroundColor: _kTextPri,
+        content: ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+              color: const Color(0xFF2D3142).withOpacity(0.65),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: Colors.white, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      message,
+                      style: GoogleFonts.inter(fontSize: 13, color: Colors.white, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         behavior: SnackBarBehavior.floating,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        padding: EdgeInsets.zero,
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         duration: const Duration(seconds: 3),
       ),
@@ -1922,7 +1958,9 @@ Future<void> _checkForUpdate() async {
             builder: (_) =>
                 ProfileDetailPage(memberData: member),
           ),
-        );
+        ).then((_) {
+          FocusManager.instance.primaryFocus?.unfocus();
+        });
       },
       child: Container(
         margin:
@@ -2165,7 +2203,9 @@ Future<void> _checkForUpdate() async {
                                 builder: (_) => ProfileDetailPage(
                                     memberData: member),
                               ),
-                            );
+                            ).then((_) {
+                              FocusManager.instance.primaryFocus?.unfocus();
+                            });
                           },
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -2601,7 +2641,7 @@ class _WishDialogState extends State<WishDialog> {
       final token = prefs.getString('bbc_token');
 
       final response = await http.get(
-        Uri.parse('https://businessboosters.club/public/api/fetch-message-prompt'),
+        Uri.parse('${BbcConfig.apiBaseUrl}/fetch-message-prompt'),
         headers: {'Authorization': 'Bearer $token'},
       );
 
@@ -2614,7 +2654,7 @@ class _WishDialogState extends State<WishDialog> {
         final json = jsonDecode(response.body);
         final data = json['data'] ?? json;
         final promptStatus = data['prompt_status']?.toString().toLowerCase() ?? 'no';
-        apiKey = data['api_key'] ?? data['gemini_api_key'] ?? 'AIzaSyAeg_D1p3v1fgPn7EyGf40e49GkjVVo7L8';
+        apiKey = data['api_key'] ?? data['gemini_api_key'] ?? BbcConfig.fallbackGeminiApiKey;
         
         promptTemplate = widget.isBirthday
             ? (data['prompt_birthday']?.toString() ?? '')
@@ -2637,12 +2677,12 @@ class _WishDialogState extends State<WishDialog> {
 
       if (useGemini && processedPrompt.isNotEmpty && apiKey.isNotEmpty) {
         String queryText = processedPrompt + 
-            "\n\nWrite a highly warm, personalized, unique wish from '$senderName' to '$recipientName'. "
-            "Use natural formatting with paragraph breaks, include relevant emojis, and vary the wording so it is unique. "
-            "Do not use markdown formatting, quotes, or asterisks (*).";
+            BbcConfig.geminiSystemInstruction
+                .replaceAll('[Recipient]', recipientName)
+                .replaceAll('[Sender]', senderName);
 
         final geminiResponse = await http.post(
-          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey'),
+          Uri.parse('${BbcConfig.geminiApiUrl}?key=$apiKey'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
             'contents': [
@@ -2675,8 +2715,8 @@ class _WishDialogState extends State<WishDialog> {
 
       if (wishText.isEmpty) {
         wishText = widget.isBirthday
-            ? '🎂 Happy Birthday $recipientName! 🎉🥳\n\nWishing you a fantastic year ahead filled with success, happiness, and prosperity.\n\nWarm Regards,\n$senderName'
-            : '💕 Happy Anniversary $recipientName! 💑\n\nWishing you both a lifetime of love, happiness, and togetherness.\n\nWarm Regards,\n$senderName';
+            ? BbcConfig.defaultBirthdayWish.replaceAll('[Recipient]', recipientName).replaceAll('[Sender]', senderName)
+            : BbcConfig.defaultAnniversaryWish.replaceAll('[Recipient]', recipientName).replaceAll('[Sender]', senderName);
       }
 
       if (mounted) {
@@ -2699,12 +2739,47 @@ class _WishDialogState extends State<WishDialog> {
     }
   }
 
+  void _showDialogSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+              color: const Color(0xFF2D3142).withOpacity(0.65),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: Colors.white, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      message,
+                      style: GoogleFonts.inter(fontSize: 13, color: Colors.white, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        behavior: SnackBarBehavior.floating,
+        padding: EdgeInsets.zero,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
   void _sendWish() async {
     final mobile = widget.member['whatsapp_number'] ?? widget.member['mobile'];
     if (mobile == null || mobile.toString().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('WhatsApp number is not available')),
-      );
+      _showDialogSnackBar('WhatsApp number is not available');
       return;
     }
     
@@ -2725,9 +2800,7 @@ class _WishDialogState extends State<WishDialog> {
       if (mounted) Navigator.pop(context);
     } catch (e) {
       debugPrint('Error launching WhatsApp: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open WhatsApp')),
-      );
+      _showDialogSnackBar('Could not open WhatsApp');
     }
   }
 
@@ -2760,18 +2833,32 @@ class _WishDialogState extends State<WishDialog> {
                     size: 24,
                   ),
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        widget.isBirthday ? 'Happy Birthday!' : 'Happy Anniversary!',
-                        style: GoogleFonts.poppins(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.black,
-                        ),
+                      Row(
+                        children: [
+                          const FaIcon(
+                            FontAwesomeIcons.whatsapp,
+                            size: 18,
+                            color: Color(0xFF25D366),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              widget.isBirthday
+                                  ? 'Send Birthday message on WhatsApp'
+                                  : 'Send Anniversary message on WhatsApp',
+                              style: GoogleFonts.poppins(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.black,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       Text(
                         'To: ${widget.member['name']}',
@@ -2788,25 +2875,15 @@ class _WishDialogState extends State<WishDialog> {
             const SizedBox(height: 20),
             if (_loading)
               Container(
-                height: 120,
+                height: 150,
                 alignment: Alignment.center,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    CircularProgressIndicator(color: colors[0]),
-                    const SizedBox(height: 14),
-                    Text(
-                      'Generating custom wish...',
-                      style: GoogleFonts.inter(fontSize: 12, color: Colors.grey[600]),
-                    ),
-                  ],
-                ),
+                child: AiPremiumLoading(colors: colors),
               )
             else ...[
               TextField(
                 controller: _textCtrl,
-                maxLines: 6,
-                minLines: 4,
+                maxLines: 20,
+                minLines: 8,
                 style: GoogleFonts.inter(fontSize: 13, height: 1.4, color: Colors.black),
                 decoration: InputDecoration(
                   filled: true,
@@ -2859,7 +2936,7 @@ class _WishDialogState extends State<WishDialog> {
                           const Icon(Icons.send_rounded, size: 14, color: Colors.white),
                           const SizedBox(width: 6),
                           Text(
-                            'Send Wish',
+                            'Send Wishes',
                             style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: Colors.white),
                           ),
                         ],
@@ -2872,6 +2949,137 @@ class _WishDialogState extends State<WishDialog> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class AiPremiumLoading extends StatefulWidget {
+  final List<Color> colors;
+  const AiPremiumLoading({super.key, required this.colors});
+
+  @override
+  State<AiPremiumLoading> createState() => _AiPremiumLoadingState();
+}
+
+class _AiPremiumLoadingState extends State<AiPremiumLoading> with SingleTickerProviderStateMixin {
+  late AnimationController _pulseCtrl;
+  late Animation<double> _scaleAnim;
+  late Animation<double> _glowAnim;
+  
+  int _statusIndex = 0;
+  Timer? _statusTimer;
+  
+  final List<String> _loadingStatuses = [
+    'Consulting Gemini AI...',
+    'Analyzing relationship...',
+    'Sprinkling warm sentiments...',
+    'Adding matching emojis...',
+    'Polishing layout formatting...',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+    
+    _scaleAnim = Tween<double>(begin: 0.92, end: 1.05).animate(
+      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
+    );
+    _glowAnim = Tween<double>(begin: 4.0, end: 16.0).animate(
+      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
+    );
+
+    _statusTimer = Timer.periodic(const Duration(milliseconds: 1500), (timer) {
+      if (mounted) {
+        setState(() {
+          _statusIndex = (_statusIndex + 1) % _loadingStatuses.length;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _statusTimer?.cancel();
+    _pulseCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        AnimatedBuilder(
+          animation: _pulseCtrl,
+          builder: (context, child) {
+            return Transform.scale(
+              scale: _scaleAnim.value,
+              child: Container(
+                width: 55,
+                height: 55,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: widget.colors,
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: widget.colors[0].withOpacity(0.35),
+                      blurRadius: _glowAnim.value,
+                      spreadRadius: _glowAnim.value * 0.2,
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.auto_awesome_rounded,
+                  color: Colors.white,
+                  size: 24,
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 24),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 300),
+          transitionBuilder: (child, anim) {
+            return FadeTransition(
+              opacity: anim,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.25),
+                  end: Offset.zero,
+                ).animate(anim),
+                child: child,
+              ),
+            );
+          },
+          child: Text(
+            _loadingStatuses[_statusIndex],
+            key: ValueKey<int>(_statusIndex),
+            textAlign: TextAlign.center,
+            style: GoogleFonts.inter(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.grey[700],
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Crafting a unique greeting card message',
+          style: GoogleFonts.inter(
+            fontSize: 10,
+            color: Colors.grey[400],
+          ),
+        ),
+      ],
     );
   }
 }
