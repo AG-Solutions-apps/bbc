@@ -120,237 +120,256 @@ class _SplashScreen2State extends State<SplashScreen2>
           height: double.infinity,
           color: Colors.white,
           child: SafeArea(
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 80),
-
-                  // ── BBC LOGO (moved down with proper spacing) ───────────
-                  FadeTransition(
-                    opacity: _logoFade,
-                    child: ScaleTransition(
-                      scale: _logoScale,
-                      child: Container(
-                        padding: const EdgeInsets.all(18),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white,
-                          boxShadow: [
-                            BoxShadow(
-                              color: _kBrand.withOpacity(0.12),
-                              blurRadius: 40,
-                              spreadRadius: 8,
-                            ),
-                            BoxShadow(
-                              color: _kPlum.withOpacity(0.08),
-                              blurRadius: 60,
-                              spreadRadius: 12,
-                            ),
-                          ],
-                        ),
-                        child: Image.asset(
-                          "assets/images/bbclogo.png",
-                          height: 180,
-                          width: 180,
-                          fit: BoxFit.contain,
-                        ),
-                      ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  physics: const ClampingScrollPhysics(),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight,
                     ),
-                  ),
-
-                   const SizedBox(height: 40),
-
-                  // Powered by 100+ Business
-                  FadeTransition(
-                    opacity: _badgeFade,
-                    child: ScaleTransition(
-                      scale: _badgeScale,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 22, vertical: 11),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [_kBrandDeep, _kPlum],
-                          ),
-                          borderRadius: BorderRadius.circular(50),
-                          boxShadow: [
-                            BoxShadow(
-                              color: _kBrand.withOpacity(0.35),
-                              blurRadius: 20,
-                              offset: const Offset(0, 6),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: const [
-                            Icon(Icons.verified_rounded,
-                                size: 18, color: Colors.white),
-                            SizedBox(width: 9),
-                            Text(
-                              "Powered by 100+ Business",
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
-                                letterSpacing: 0.3,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 40),
-
-                  // Loading Indicator
-                  FadeTransition(
-                    opacity: _loaderFade,
-                    child: Column(
-                      children: [
-                        SizedBox(
-                          height: 30,
-                          width: 30,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.5,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(_kBrand),
-                            backgroundColor: _kBrand.withOpacity(0.12),
-                          ),
-                        ),
-                        const SizedBox(height: 15),
-                        Text(
-                          "Loading Amazing Experience...",
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                            color: _kBrand.withOpacity(0.55),
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 120),
-
-                  // ── DIVIDER ─────────────────────────────────────────────
-                  Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 30),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Container(
-                            height: 1,
-                            color: const Color.fromARGB(255, 33, 150, 243).withOpacity(0.2),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: Container(
-                            width: 6,
-                            height: 6,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: _kBlue.withOpacity(0.4),
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          child: Container(
-                            height: 1,
-                            color: _kBlue.withOpacity(0.2),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 25),
-
-                  // Crafted with Love Text + AG Solutions SVG Image
-                  SlideTransition(
-                    position: _loveSlide,
-                    child: FadeTransition(
-                      opacity: _loveFade,
+                    child: IntrinsicHeight(
                       child: Column(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                          // Top / Center logo section
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const SizedBox(height: 40),
+                                // ── BBC LOGO (centered) ───────────
+                                FadeTransition(
+                                  opacity: _logoFade,
+                                  child: ScaleTransition(
+                                    scale: _logoScale,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(18),
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: Colors.white,
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: _kBrand.withOpacity(0.12),
+                                            blurRadius: 40,
+                                            spreadRadius: 8,
+                                          ),
+                                          BoxShadow(
+                                            color: _kPlum.withOpacity(0.08),
+                                            blurRadius: 60,
+                                            spreadRadius: 12,
+                                          ),
+                                        ],
+                                      ),
+                                      child: Image.asset(
+                                        "assets/images/bbclogo.png",
+                                        height: 170,
+                                        width: 170,
+                                        fit: BoxFit.contain,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+
+                                const SizedBox(height: 30),
+
+                                // Powered by 100+ Business
+                                FadeTransition(
+                                  opacity: _badgeFade,
+                                  child: ScaleTransition(
+                                    scale: _badgeScale,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 22, vertical: 11),
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          colors: [_kBrandDeep, _kPlum],
+                                        ),
+                                        borderRadius: BorderRadius.circular(50),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: _kBrand.withOpacity(0.35),
+                                            blurRadius: 20,
+                                            offset: const Offset(0, 6),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: const [
+                                          Icon(Icons.verified_rounded,
+                                              size: 18, color: Colors.white),
+                                          SizedBox(width: 9),
+                                          Text(
+                                            "Powered by 100+ Business",
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w700,
+                                              color: Colors.white,
+                                              letterSpacing: 0.3,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+
+                                const SizedBox(height: 40),
+
+                                // Loading Indicator
+                                FadeTransition(
+                                  opacity: _loaderFade,
+                                  child: Column(
+                                    children: [
+                                      SizedBox(
+                                        height: 28,
+                                        width: 28,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.5,
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(_kBrand),
+                                          backgroundColor: _kBrand.withOpacity(0.12),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 15),
+                                      Text(
+                                        "Loading Amazing Experience...",
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w500,
+                                          color: _kBrand.withOpacity(0.55),
+                                          letterSpacing: 0.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 40),
+                              ],
+                            ),
+                          ),
+
+                          // Bottom Footer Section
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                "This app is Crafted with",
-                                style: TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.black.withOpacity(0.5),
-                                  letterSpacing: 0.3,
+                              // ── DIVIDER ──
+                              Container(
+                                margin: const EdgeInsets.symmetric(horizontal: 30),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Container(
+                                        height: 1,
+                                        color: const Color.fromARGB(255, 33, 150, 243).withOpacity(0.2),
+                                      ),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                                      child: Container(
+                                        width: 6,
+                                        height: 6,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: _kBlue.withOpacity(0.4),
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Container(
+                                        height: 1,
+                                        color: _kBlue.withOpacity(0.2),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              const SizedBox(width: 4),
-                              Icon(
-                                Icons.favorite,
-                                size: 17,
-                                color: const Color.fromARGB(255, 255, 0, 0),
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                "by",
-                                style: TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.black.withOpacity(0.5),
-                                  letterSpacing: 0.3,
+
+                              const SizedBox(height: 20),
+
+                              // Crafted with Love Text + AG Solutions Logo
+                              SlideTransition(
+                                position: _loveSlide,
+                                child: FadeTransition(
+                                  opacity: _loveFade,
+                                  child: Column(
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            "This app is Crafted with",
+                                            style: TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w500,
+                                              color: Colors.black.withOpacity(0.5),
+                                              letterSpacing: 0.3,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          const Icon(
+                                            Icons.favorite,
+                                            size: 15,
+                                            color: Color.fromARGB(255, 255, 0, 0),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            "by",
+                                            style: TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w500,
+                                              color: Colors.black.withOpacity(0.5),
+                                              letterSpacing: 0.3,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Image.asset(
+                                        "assets/images/ag1.png",
+                                        height: 55,
+                                        width: 170,
+                                        fit: BoxFit.contain,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
+
+                              const SizedBox(height: 16),
+
+                              // Service Chips (Blue themed)
+                              SlideTransition(
+                                position: _chipsSlide,
+                                child: FadeTransition(
+                                  opacity: _chipsFade,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                                    child: Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      alignment: WrapAlignment.center,
+                                      children: [
+                                        _blueChip(Icons.public, "Web"),
+                                        _blueChip(Icons.phone_android, "Mobile App"),
+                                        _blueChip(Icons.web, "Web App"),
+                                        _blueChip(Icons.design_services, "UI/UX"),
+                                        _blueChip(Icons.trending_up, "Digital Marketing"),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 25),
                             ],
                           ),
-                          const SizedBox(height: 8),
-                          // AG Solutions SVG Image
-                        Image.asset(
-  "assets/images/ag1.png",
-  height: 70,
-  width: 200,
-  fit: BoxFit.contain,
-)
                         ],
                       ),
                     ),
                   ),
-
-                  const SizedBox(height: 30),
-
-                  // Divider line below AG Solutions
-                  
-                  // Service Chips (Blue themed)
-                  SlideTransition(
-                    position: _chipsSlide,
-                    child: FadeTransition(
-                      opacity: _chipsFade,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: Wrap(
-                          spacing: 12,
-                          runSpacing: 12,
-                          alignment: WrapAlignment.center,
-                          children: [
-                            _blueChip(Icons.public, "Web"),
-                            _blueChip(Icons.phone_android, "Mobile App"),
-                            _blueChip(Icons.web, "Web App"),
-                            _blueChip(Icons.design_services, "UI/UX"),
-                            _blueChip(Icons.trending_up, "Digital Marketing"),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-
-                 
-                ],
-              ),
+                );
+              },
             ),
           ),
         ),

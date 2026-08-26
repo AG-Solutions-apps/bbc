@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:yaani/Views/Screens/Bbc/LoginScreen.dart';
 import 'package:yaani/Views/Screens/Bbc/activity.dart';
 import 'BbcBottomNavBar.dart';
+import 'dart:ui' show ImageFilter;
 
 // ─── Brand tokens (identical across all BBC screens) ──────────────────────────
 const _kBrand      = Color(0xFFB0126B);
@@ -326,12 +327,32 @@ class _ProfilePageBBccState extends State<ProfilePageBBcc> with SingleTickerProv
     ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message,
-            style: GoogleFonts.inter(fontSize: 13, color: Colors.white)),
-        backgroundColor: _kTextPri,
+        content: ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+              color: const Color(0xFF2D3142).withOpacity(0.65),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: Colors.white, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      message,
+                      style: GoogleFonts.inter(fontSize: 13, color: Colors.white, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         behavior: SnackBarBehavior.floating,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        padding: EdgeInsets.zero,
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         duration: const Duration(seconds: 3),
       ),
@@ -521,6 +542,8 @@ class _ProfilePageBBccState extends State<ProfilePageBBcc> with SingleTickerProv
 
     Navigator.pushAndRemoveUntil(
       context,
+
+      
       MaterialPageRoute(builder: (context) => const LoginScreen()),
       (route) => false,
     );
