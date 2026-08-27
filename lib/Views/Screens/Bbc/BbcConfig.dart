@@ -3,10 +3,7 @@ class BbcConfig {
   static const String imageBaseUrl = 'http://businessboosters.club/public/images/user_images/';
   static const String sliderImageBaseUrl = 'https://businessboosters.club/public/images/slider_images/';
   
-  // Gemini settings
-  static const String geminiApiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
-  static const String fallbackGeminiApiKey = 'AIzaSyBbmLRhQh6LKchiQI-Ux3eGrCZKUIXQ3qQ';
-  
+
   // Instructions & default fallback prompts
   static const String geminiSystemInstruction = 
       '\n\nWrite a highly warm, personalized, unique wish from "[Sender]" to "[Recipient]". '
@@ -22,4 +19,14 @@ class BbcConfig {
       '💕 Happy Anniversary [Recipient]! 💑\n\n'
       'Wishing you both a lifetime of love, happiness, and togetherness.\n\n'
       'Warm Regards,\n[Sender]';
+
+  // App update settings
+  static const String latestAppVersion = '61.0.4'; 
+  static const String playStoreUrl = 'https://play.google.com/store/apps/details?id=com.bbc.agsolutions';
+  static const List<String> updateFeatures = [
+    'Ultra-fast scrolling experience',
+    'AI-powered wishing message generator',
+    'Frosted glassmorphism design layouts',
+    'Enhanced security and account status checks'
+  ];
 }

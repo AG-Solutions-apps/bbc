@@ -1786,18 +1786,25 @@ class _WishDialogState extends State<WishDialog> {
       bool useGemini = false;
       String promptTemplate = '';
       String apiKey = '';
+      String geminiUrl = '';
 
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         final data = json['data'] ?? json;
         final promptStatus = data['prompt_status']?.toString().toLowerCase() ?? 'no';
-        apiKey = data['api_key'] ?? data['gemini_api_key'] ?? BbcConfig.fallbackGeminiApiKey;
+        
+        final rawKey = data['prompt_key']?.toString() ?? '';
+        apiKey = rawKey.isNotEmpty 
+            ? rawKey 
+            : (data['api_key'] ?? data['gemini_api_key'] ?? '').toString();
+            
+        geminiUrl = data['prompt_url']?.toString() ?? '';
         
         promptTemplate = widget.isBirthday
             ? (data['prompt_birthday']?.toString() ?? '')
             : (data['prompt_anniversary']?.toString() ?? '');
 
-        if (promptStatus == 'yes') {
+        if (promptStatus == 'yes' && apiKey.isNotEmpty && geminiUrl.isNotEmpty) {
           useGemini = true;
         }
       }
@@ -1812,14 +1819,19 @@ class _WishDialogState extends State<WishDialog> {
           .replaceAll('Recipient', recipientName)
           .replaceAll('Sender', senderName);
 
-      if (useGemini && processedPrompt.isNotEmpty && apiKey.isNotEmpty) {
+      if (useGemini && processedPrompt.isNotEmpty && apiKey.isNotEmpty && geminiUrl.isNotEmpty) {
         String queryText = processedPrompt + 
             BbcConfig.geminiSystemInstruction
                 .replaceAll('[Recipient]', recipientName)
                 .replaceAll('[Sender]', senderName);
 
+        String fullUrl = geminiUrl;
+        if (!fullUrl.contains('?key=')) {
+          fullUrl = '$fullUrl?key=$apiKey';
+        }
+
         final geminiResponse = await http.post(
-          Uri.parse('${BbcConfig.geminiApiUrl}?key=$apiKey'),
+          Uri.parse(fullUrl),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
             'contents': [

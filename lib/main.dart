@@ -8,6 +8,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yaani/firebase_options.dart';
 import 'package:yaani/Services/NotificationService.dart';
 import 'dart:ui' show ImageFilter;
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'Views/Screens/Bbc/Splash2.dart';
 import 'Views/Screens/Bbc/OnBoardingSlider.dart';
@@ -67,6 +69,9 @@ class GlobalSessionCheck extends StatefulWidget {
 class _GlobalSessionCheckState extends State<GlobalSessionCheck> {
   Timer? _pollingTimer;
   bool _isChecking = false;
+  bool _showUpdateNotification = false;
+  String? _storeVersion;
+  String? _updateUrl;
 
   @override
   void initState() {
@@ -75,12 +80,63 @@ class _GlobalSessionCheckState extends State<GlobalSessionCheck> {
     _pollingTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       _checkUserStatus();
     });
+    // Check for updates globally on app launch
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAppUpdate();
+    });
   }
 
   @override
   void dispose() {
     _pollingTimer?.cancel();
     super.dispose();
+  }
+
+  bool _isVersionOlder(String local, String latest) {
+    try {
+      final localParts = local.split('+')[0].split('.').map(int.parse).toList();
+      final latestParts = latest.split('+')[0].split('.').map(int.parse).toList();
+      
+      for (int i = 0; i < latestParts.length; i++) {
+        final localPart = i < localParts.length ? localParts[i] : 0;
+        final latestPart = latestParts[i];
+        if (localPart < latestPart) return true;
+        if (localPart > latestPart) return false;
+      }
+    } catch (e) {
+      debugPrint('Error comparing versions: $e');
+    }
+    return false;
+  }
+
+  Future<void> _checkAppUpdate() async {
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      final localVersion = packageInfo.version;
+      
+      if (_isVersionOlder(localVersion, BbcConfig.latestAppVersion)) {
+        setState(() {
+          _storeVersion = BbcConfig.latestAppVersion;
+          _updateUrl = BbcConfig.playStoreUrl;
+          _showUpdateNotification = true;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error checking app update: $e');
+    }
+  }
+
+  Future<void> _redirectToPlayStore() async {
+    if (_updateUrl != null && _updateUrl!.isNotEmpty) {
+      final uri = Uri.parse(_updateUrl!);
+      try {
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        }
+      } catch (e) {
+        debugPrint('Could not launch Play Store: $e');
+      }
+    }
   }
 
   Future<void> _checkUserStatus() async {
@@ -181,8 +237,217 @@ class _GlobalSessionCheckState extends State<GlobalSessionCheck> {
     }
   }
 
+  Widget _buildGlobalUpdateOverlay() {
+    return Positioned.fill(
+      child: Material(
+        color: Colors.black.withOpacity(0.6),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 8.0, sigmaY: 8.0),
+          child: Center(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 32),
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.25),
+                    blurRadius: 30,
+                    offset: const Offset(0, 15),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Glowing Header Icon
+                  Container(
+                    width: 70,
+                    height: 70,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFFB0126B), Color(0xFFE91E63)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFB0126B).withOpacity(0.4),
+                          blurRadius: 16,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.system_update_rounded,
+                      color: Colors.white,
+                      size: 36,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  // Title
+                  const Text(
+                    'Time to Update!',
+                    style: TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF1A0A13),
+                      fontFamily: 'Poppins',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'A new version (${_storeVersion ?? "latest"}) is available. Update now to enjoy the latest features and optimizations.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[600],
+                      height: 1.45,
+                      fontFamily: 'Poppins',
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  // What's new box
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFAF7F9),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFFB0126B).withOpacity(0.08)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          "WHAT'S NEW",
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFFB0126B),
+                            letterSpacing: 1.2,
+                            fontFamily: 'Poppins',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ...BbcConfig.updateFeatures.map((feature) => Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 4),
+                                    child: Icon(Icons.circle, size: 6, color: Color(0xFFB0126B)),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      feature,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Color(0xFF7A5870),
+                                        height: 1.3,
+                                        fontFamily: 'Poppins',
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  // Buttons
+                  Row(
+                    children: [
+                      // Later Button
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () {
+                            setState(() {
+                              _showUpdateNotification = false;
+                            });
+                          },
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(color: Colors.grey[300]!),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: Text(
+                            'Later',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey[750],
+                              fontFamily: 'Poppins',
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Update Button
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFFB0126B), Color(0xFFE91E63)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFFB0126B).withOpacity(0.3),
+                                blurRadius: 10,
+                                offset: const Offset(0, 5),
+                              ),
+                            ],
+                          ),
+                          child: ElevatedButton(
+                            onPressed: _redirectToPlayStore,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.transparent,
+                              shadowColor: Colors.transparent,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                            ),
+                            child: const Text(
+                              'Update Now',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                                fontFamily: 'Poppins',
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return widget.child ?? const SizedBox.shrink();
+    return Stack(
+      children: [
+        if (widget.child != null) widget.child!,
+        if (_showUpdateNotification) _buildGlobalUpdateOverlay(),
+      ],
+    );
   }
 }
